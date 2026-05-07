@@ -1,4 +1,8 @@
 const STORAGE_KEY = "personal-school-schedule-v1";
+const SUPABASE_CONFIG = window.SUPABASE_CONFIG || {};
+const SUPABASE_URL = String(SUPABASE_CONFIG.url || "").replace(/\/$/, "");
+const SUPABASE_ANON_KEY = String(SUPABASE_CONFIG.anonKey || "");
+const SUPABASE_TABLE = String(SUPABASE_CONFIG.table || "schedules");
 
 const CATEGORY_LABELS = {
   homeroom: "담임 일정",
@@ -13,7 +17,7 @@ const CATEGORY_SHORT_LABELS = {
 };
 
 const state = {
-  schedules: loadSchedules(),
+  schedules: [],
   visibleDate: startOfMonth(new Date()),
   selectedDate: toDateInputValue(new Date()),
   filter: "all",
@@ -56,9 +60,10 @@ const elements = {
 
 init();
 
-function init() {
+async function init() {
   elements.dateInput.value = state.selectedDate;
   bindEvents();
+  state.schedules = await loadSchedules();
   render();
 }
 
@@ -85,7 +90,7 @@ function bindEvents() {
   elements.clearCompletedButton.addEventListener("click", clearCompleted);
 }
 
-function handleSubmit(event) {
+async function handleSubmit(event) {
   event.preventDefault();
 
   const draft = {
@@ -112,19 +117,37 @@ function handleSubmit(event) {
   }
 
   const existingIndex = state.schedules.findIndex((schedule) => schedule.id === draft.id);
-  if (existingIndex >= 0) {
+  const existingSchedule = state.schedules[existingIndex];
+  if (existingSchedule) {
     draft.completed = state.schedules[existingIndex].completed;
     draft.createdAt = state.schedules[existingIndex].createdAt;
-    state.schedules.splice(existingIndex, 1, draft);
-    showToast("일정을 수정했습니다.");
-  } else {
-    state.schedules.push(draft);
-    showToast("일정을 추가했습니다.");
   }
+
+  try {
+    const savedSchedule = await upsertScheduleInDatabase(draft);
+    if (existingIndex >= 0) {
+      state.schedules.splice(existingIndex, 1, savedSchedule);
+      showToast("일정을 수정했습니다.");
+    } else {
+      state.schedules.push(savedSchedule);
+      showToast("일정을 추가했습니다.");
+    }
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (error) {
+    console.error(error);
+    if (existingIndex >= 0) {
+      state.schedules.splice(existingIndex, 1, draft);
+    } else {
+      state.schedules.push(draft);
+    }
+    saveLegacySchedules();
+    showToast("Supabase 저장에 실패해 이 기기에 임시 저장했습니다.");
+  }
+
+  state.schedules.sort(sortSchedules);
 
   state.visibleDate = startOfMonth(parseDate(draft.date));
   state.selectedDate = draft.date;
-  persist();
   resetForm();
   render();
 }
@@ -379,7 +402,7 @@ function editSchedule(id) {
   elements.titleInput.focus();
 }
 
-function deleteSchedule(id) {
+async function deleteSchedule(id) {
   const schedule = state.schedules.find((item) => item.id === id);
   if (!schedule) return;
 
@@ -387,21 +410,40 @@ function deleteSchedule(id) {
   if (!confirmed) return;
 
   state.schedules = state.schedules.filter((item) => item.id !== id);
-  persist();
+  try {
+    await deleteScheduleFromDatabase(id);
+    localStorage.removeItem(STORAGE_KEY);
+    showToast("일정을 삭제했습니다.");
+  } catch (error) {
+    console.error(error);
+    saveLegacySchedules();
+    showToast("Supabase 삭제에 실패해 이 기기에 임시 반영했습니다.");
+  }
   resetForm();
   render();
-  showToast("일정을 삭제했습니다.");
 }
 
-function toggleComplete(id) {
+async function toggleComplete(id) {
+  const changedSchedule = state.schedules.find((schedule) => schedule.id === id);
+  if (!changedSchedule) return;
+
+  const updatedSchedule = { ...changedSchedule, completed: !changedSchedule.completed };
   state.schedules = state.schedules.map((schedule) =>
-    schedule.id === id ? { ...schedule, completed: !schedule.completed } : schedule,
+    schedule.id === id ? updatedSchedule : schedule,
   );
-  persist();
+
+  try {
+    await updateScheduleInDatabase(updatedSchedule);
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (error) {
+    console.error(error);
+    saveLegacySchedules();
+    showToast("Supabase 저장에 실패해 이 기기에 임시 반영했습니다.");
+  }
   render();
 }
 
-function clearCompleted() {
+async function clearCompleted() {
   const completedCount = state.schedules.filter((schedule) => schedule.completed).length;
   if (!completedCount) {
     showToast("정리할 완료 일정이 없습니다.");
@@ -412,10 +454,17 @@ function clearCompleted() {
   if (!confirmed) return;
 
   state.schedules = state.schedules.filter((schedule) => !schedule.completed);
-  persist();
+  try {
+    await deleteCompletedSchedulesFromDatabase();
+    localStorage.removeItem(STORAGE_KEY);
+    showToast("완료 일정을 정리했습니다.");
+  } catch (error) {
+    console.error(error);
+    saveLegacySchedules();
+    showToast("Supabase 정리에 실패해 이 기기에 임시 반영했습니다.");
+  }
   resetForm();
   render();
-  showToast("완료 일정을 정리했습니다.");
 }
 
 function getFilteredSchedules() {
@@ -453,7 +502,7 @@ function importSchedules(event) {
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const parsed = JSON.parse(String(reader.result));
       const imported = Array.isArray(parsed) ? parsed : parsed.schedules;
@@ -463,12 +512,30 @@ function importSchedules(event) {
         .map(normalizeSchedule)
         .filter((schedule) => schedule.title && schedule.date && CATEGORY_LABELS[schedule.category]);
 
-      state.schedules = mergeSchedules(state.schedules, normalized);
-      persist();
+      const savedSchedules = await upsertSchedulesInDatabase(normalized);
+      state.schedules = mergeSchedules(state.schedules, savedSchedules);
+      localStorage.removeItem(STORAGE_KEY);
       render();
       showToast(`${normalized.length}개 일정을 가져왔습니다.`);
     } catch (error) {
-      showToast("가져올 수 없는 파일입니다.");
+      console.error(error);
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        const imported = Array.isArray(parsed) ? parsed : parsed.schedules;
+        const normalized = Array.isArray(imported)
+          ? imported
+              .map(normalizeSchedule)
+              .filter((schedule) => schedule.title && schedule.date && CATEGORY_LABELS[schedule.category])
+          : [];
+
+        if (!normalized.length) throw new Error("Invalid schedule file");
+        state.schedules = mergeSchedules(state.schedules, normalized);
+        saveLegacySchedules();
+        render();
+        showToast("Supabase 가져오기에 실패해 이 기기에 임시 저장했습니다.");
+      } catch (fallbackError) {
+        showToast("가져올 수 없는 파일입니다.");
+      }
     } finally {
       elements.importInput.value = "";
     }
@@ -482,16 +549,156 @@ function mergeSchedules(current, imported) {
   return Array.from(byId.values()).sort(sortSchedules);
 }
 
-function loadSchedules() {
+async function loadSchedules() {
+  try {
+    const databaseSchedules = await readAllSchedulesFromDatabase();
+    const normalized = databaseSchedules
+      .map(normalizeSchedule)
+      .filter((schedule) => schedule.title && schedule.date);
+
+    const legacySchedules = loadLegacySchedules();
+    if (!normalized.length && legacySchedules.length) {
+      await upsertSchedulesInDatabase(legacySchedules);
+      localStorage.removeItem(STORAGE_KEY);
+      showToast("기존 저장 일정을 Supabase로 옮겼습니다.");
+      return legacySchedules.sort(sortSchedules);
+    }
+
+    localStorage.removeItem(STORAGE_KEY);
+    return normalized.sort(sortSchedules);
+  } catch (error) {
+    console.error(error);
+    showToast("Supabase에 연결할 수 없어 임시 저장소를 사용합니다.");
+    return loadLegacySchedules();
+  }
+}
+
+function loadLegacySchedules() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeSchedule).filter((schedule) => schedule.title && schedule.date);
+    return parsed.map(normalizeSchedule).filter((schedule) => schedule.title && schedule.date).sort(sortSchedules);
   } catch (error) {
     return [];
   }
+}
+
+async function readAllSchedulesFromDatabase() {
+  const rows = await supabaseRequest(`${SUPABASE_TABLE}?select=*&order=date.asc,start_time.asc,title.asc`);
+  return rows.map(scheduleFromDatabase);
+}
+
+async function upsertScheduleInDatabase(schedule) {
+  const savedSchedules = await upsertSchedulesInDatabase([schedule]);
+  return savedSchedules[0] || normalizeSchedule(schedule);
+}
+
+async function updateScheduleInDatabase(schedule) {
+  const rows = await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(schedule.id)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(scheduleToDatabase(schedule)),
+  });
+
+  return rows[0] ? scheduleFromDatabase(rows[0]) : normalizeSchedule(schedule);
+}
+
+async function upsertSchedulesInDatabase(schedules) {
+  const normalized = schedules.map(normalizeSchedule);
+  if (!normalized.length) return [];
+
+  const rows = await supabaseRequest(`${SUPABASE_TABLE}?on_conflict=id`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(normalized.map(scheduleToDatabase)),
+  });
+
+  return rows.map(scheduleFromDatabase);
+}
+
+async function deleteScheduleFromDatabase(id) {
+  await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { Prefer: "return=minimal" },
+  });
+}
+
+async function deleteCompletedSchedulesFromDatabase() {
+  await supabaseRequest(`${SUPABASE_TABLE}?completed=eq.true`, {
+    method: "DELETE",
+    headers: { Prefer: "return=minimal" },
+  });
+}
+
+async function supabaseRequest(path, options = {}) {
+  if (!isSupabaseConfigured()) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Supabase request failed: ${response.status} ${message}`);
+  }
+
+  if (response.status === 204) return [];
+
+  const text = await response.text();
+  return text ? JSON.parse(text) : [];
+}
+
+function isSupabaseConfigured() {
+  return (
+    Boolean(SUPABASE_URL) &&
+    Boolean(SUPABASE_ANON_KEY) &&
+    !SUPABASE_URL.includes("YOUR-PROJECT") &&
+    !SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")
+  );
+}
+
+function scheduleFromDatabase(row) {
+  return normalizeSchedule({
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    date: row.date,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    place: row.place,
+    memo: row.memo,
+    completed: row.completed,
+    createdAt: row.created_at,
+  });
+}
+
+function scheduleToDatabase(schedule) {
+  const normalized = normalizeSchedule(schedule);
+
+  return {
+    id: normalized.id,
+    category: normalized.category,
+    title: normalized.title,
+    date: normalized.date,
+    start_time: normalized.startTime,
+    end_time: normalized.endTime,
+    place: normalized.place,
+    memo: normalized.memo,
+    completed: normalized.completed,
+    created_at: normalized.createdAt,
+    updated_at: new Date().toISOString(),
+  };
 }
 
 function normalizeSchedule(schedule) {
@@ -509,8 +716,10 @@ function normalizeSchedule(schedule) {
   };
 }
 
-function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.schedules));
+function saveLegacySchedules() {
+  const normalized = state.schedules.map(normalizeSchedule).sort(sortSchedules);
+  state.schedules = normalized;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
 }
 
 function sortSchedules(a, b) {
