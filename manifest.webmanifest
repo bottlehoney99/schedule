@@ -1,0 +1,9 @@
+{
+  "name": "학교 일정 관리",
+  "short_name": "학교 일정",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#0f766e"
+}

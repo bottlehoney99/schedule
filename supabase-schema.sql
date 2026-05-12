@@ -7,10 +7,27 @@ create table if not exists public.schedules (
   end_time text not null default '',
   place text not null default '',
   memo text not null default '',
+  reminder_minutes integer check (reminder_minutes is null or reminder_minutes >= 0),
   completed boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.schedules
+add column if not exists reminder_minutes integer;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'schedules_reminder_minutes_check'
+  ) then
+    alter table public.schedules
+    add constraint schedules_reminder_minutes_check
+    check (reminder_minutes is null or reminder_minutes >= 0);
+  end if;
+end $$;
 
 alter table public.schedules enable row level security;
 

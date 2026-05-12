@@ -3,6 +3,13 @@ const SUPABASE_CONFIG = window.SUPABASE_CONFIG || {};
 const SUPABASE_URL = String(SUPABASE_CONFIG.url || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = String(SUPABASE_CONFIG.anonKey || "");
 const SUPABASE_TABLE = String(SUPABASE_CONFIG.table || "schedules");
+const NOTIFIED_STORAGE_KEY = "personal-school-schedule-notified-v1";
+const DEFAULT_REMINDER_MINUTES = 10;
+const NOTIFICATION_CHECK_INTERVAL_MS = 30 * 1000;
+const DATE_ONLY_NOTIFICATION_TIME = "08:00";
+
+let notificationTimer = null;
+let serviceWorkerRegistration = null;
 
 const CATEGORY_LABELS = {
   homeroom: "담임 일정",
@@ -37,6 +44,7 @@ const elements = {
   placeInput: document.querySelector("#placeInput"),
   startTimeInput: document.querySelector("#startTimeInput"),
   endTimeInput: document.querySelector("#endTimeInput"),
+  reminderInput: document.querySelector("#reminderInput"),
   memoInput: document.querySelector("#memoInput"),
   statsGrid: document.querySelector("#statsGrid"),
   upcomingList: document.querySelector("#upcomingList"),
@@ -55,6 +63,9 @@ const elements = {
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
   clearCompletedButton: document.querySelector("#clearCompletedButton"),
+  notificationButton: document.querySelector("#notificationButton"),
+  testNotificationButton: document.querySelector("#testNotificationButton"),
+  notificationStatus: document.querySelector("#notificationStatus"),
   template: document.querySelector("#eventTemplate"),
 };
 
@@ -62,9 +73,14 @@ init();
 
 async function init() {
   elements.dateInput.value = state.selectedDate;
+  elements.reminderInput.value = String(DEFAULT_REMINDER_MINUTES);
   bindEvents();
+  await registerServiceWorker();
   state.schedules = await loadSchedules();
+  applyInitialScheduleSelection();
   render();
+  renderNotificationStatus();
+  startNotificationScheduler();
 }
 
 function bindEvents() {
@@ -88,6 +104,11 @@ function bindEvents() {
   elements.exportButton.addEventListener("click", exportSchedules);
   elements.importInput.addEventListener("change", importSchedules);
   elements.clearCompletedButton.addEventListener("click", clearCompleted);
+  elements.notificationButton.addEventListener("click", requestNotificationPermission);
+  elements.testNotificationButton.addEventListener("click", sendTestNotification);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkDueNotifications();
+  });
 }
 
 async function handleSubmit(event) {
@@ -102,6 +123,7 @@ async function handleSubmit(event) {
     endTime: elements.endTimeInput.value,
     place: elements.placeInput.value.trim(),
     memo: elements.memoInput.value.trim(),
+    reminderMinutes: parseReminderValue(elements.reminderInput.value),
     completed: false,
     createdAt: new Date().toISOString(),
   };
@@ -157,6 +179,7 @@ function resetForm() {
   elements.scheduleForm.reset();
   elements.editingId.value = "";
   elements.dateInput.value = selectedDate;
+  elements.reminderInput.value = String(DEFAULT_REMINDER_MINUTES);
   elements.formTitle.textContent = "새 일정";
   elements.submitLabel.textContent = "일정 추가";
   elements.cancelEditButton.classList.add("hidden");
@@ -365,6 +388,7 @@ function createEventItem(schedule) {
 
   const metaParts = [formatDate(schedule.date)];
   if (schedule.place) metaParts.push(schedule.place);
+  if (schedule.reminderMinutes !== null) metaParts.push(formatReminder(schedule.reminderMinutes));
   node.querySelector(".event-meta").textContent = metaParts.join(" · ");
 
   const memo = node.querySelector(".event-memo");
@@ -392,6 +416,7 @@ function editSchedule(id) {
   elements.placeInput.value = schedule.place;
   elements.startTimeInput.value = schedule.startTime;
   elements.endTimeInput.value = schedule.endTime;
+  elements.reminderInput.value = schedule.reminderMinutes === null ? "none" : String(schedule.reminderMinutes);
   elements.memoInput.value = schedule.memo;
   elements.formTitle.textContent = "일정 수정";
   elements.submitLabel.textContent = "수정 저장";
@@ -678,6 +703,7 @@ function scheduleFromDatabase(row) {
     endTime: row.end_time,
     place: row.place,
     memo: row.memo,
+    reminderMinutes: row.reminder_minutes,
     completed: row.completed,
     createdAt: row.created_at,
   });
@@ -695,6 +721,7 @@ function scheduleToDatabase(schedule) {
     end_time: normalized.endTime,
     place: normalized.place,
     memo: normalized.memo,
+    reminder_minutes: normalized.reminderMinutes,
     completed: normalized.completed,
     created_at: normalized.createdAt,
     updated_at: new Date().toISOString(),
@@ -711,6 +738,7 @@ function normalizeSchedule(schedule) {
     endTime: String(schedule.endTime || ""),
     place: String(schedule.place || "").trim(),
     memo: String(schedule.memo || "").trim(),
+    reminderMinutes: parseReminderValue(schedule.reminderMinutes ?? schedule.reminder_minutes ?? null),
     completed: Boolean(schedule.completed),
     createdAt: schedule.createdAt || new Date().toISOString(),
   };
@@ -720,6 +748,194 @@ function saveLegacySchedules() {
   const normalized = state.schedules.map(normalizeSchedule).sort(sortSchedules);
   state.schedules = normalized;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator) || window.location.protocol === "file:") return;
+
+  try {
+    serviceWorkerRegistration = await navigator.serviceWorker.register("sw.js");
+  } catch (error) {
+    console.warn("Service worker registration failed.", error);
+  }
+}
+
+async function requestNotificationPermission() {
+  if (!("Notification" in window)) {
+    showToast("이 브라우저는 알림을 지원하지 않습니다.");
+    renderNotificationStatus();
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    showToast("알림은 localhost 또는 HTTPS 주소에서만 안정적으로 동작합니다.");
+  }
+
+  const permission = await Notification.requestPermission();
+  renderNotificationStatus();
+
+  if (permission === "granted") {
+    showToast("알림을 허용했습니다.");
+    checkDueNotifications();
+  } else if (permission === "denied") {
+    showToast("브라우저 설정에서 알림 차단을 해제해야 합니다.");
+  } else {
+    showToast("알림 권한이 아직 허용되지 않았습니다.");
+  }
+}
+
+async function sendTestNotification() {
+  if (!("Notification" in window)) {
+    showToast("이 브라우저는 알림을 지원하지 않습니다.");
+    return;
+  }
+
+  if (Notification.permission !== "granted") {
+    await requestNotificationPermission();
+  }
+
+  if (Notification.permission !== "granted") return;
+
+  await showNotification("학교 일정 테스트 알림", {
+    body: "Windows와 휴대폰 브라우저에서 이런 형태로 일정 알림이 표시됩니다.",
+    tag: "school-schedule-test",
+  });
+  showToast("테스트 알림을 보냈습니다.");
+}
+
+function renderNotificationStatus() {
+  if (!elements.notificationStatus) return;
+
+  elements.notificationStatus.classList.remove("is-ready", "is-blocked");
+
+  if (!("Notification" in window)) {
+    elements.notificationStatus.textContent = "미지원";
+    elements.notificationStatus.classList.add("is-blocked");
+    return;
+  }
+
+  if (Notification.permission === "granted") {
+    elements.notificationStatus.textContent = "켜짐";
+    elements.notificationStatus.classList.add("is-ready");
+    return;
+  }
+
+  if (Notification.permission === "denied") {
+    elements.notificationStatus.textContent = "차단됨";
+    elements.notificationStatus.classList.add("is-blocked");
+    return;
+  }
+
+  elements.notificationStatus.textContent = "대기";
+}
+
+function startNotificationScheduler() {
+  if (notificationTimer) window.clearInterval(notificationTimer);
+  checkDueNotifications();
+  notificationTimer = window.setInterval(checkDueNotifications, NOTIFICATION_CHECK_INTERVAL_MS);
+}
+
+async function checkDueNotifications() {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+  const now = new Date();
+  const sentKeys = readNotifiedKeys();
+  let changed = false;
+
+  for (const schedule of state.schedules) {
+    if (schedule.completed || schedule.reminderMinutes === null) continue;
+
+    const timing = getNotificationTiming(schedule);
+    if (!timing) continue;
+
+    const key = getNotificationKey(schedule);
+    if (sentKeys.has(key)) continue;
+
+    const reminderTime = timing.reminderTime.getTime();
+    const eventTime = timing.eventTime.getTime();
+    const nowTime = now.getTime();
+
+    if (reminderTime <= nowTime && eventTime + 60 * 1000 >= nowTime) {
+      sentKeys.add(key);
+      changed = true;
+      await showScheduleNotification(schedule);
+    }
+  }
+
+  if (changed) writeNotifiedKeys(sentKeys);
+}
+
+async function showScheduleNotification(schedule) {
+  const timeText = formatTimeRange(schedule);
+  const placeText = schedule.place ? ` · ${schedule.place}` : "";
+  const reminderText = schedule.reminderMinutes === 0 ? "정시 알림" : `${formatReminder(schedule.reminderMinutes)} 알림`;
+
+  await showNotification(`일정 알림: ${schedule.title}`, {
+    body: `${formatDate(schedule.date)} ${timeText}${placeText}\n${CATEGORY_LABELS[schedule.category]} · ${reminderText}`,
+    tag: getNotificationKey(schedule),
+    data: { scheduleId: schedule.id, url: `${window.location.origin}${window.location.pathname}?schedule=${encodeURIComponent(schedule.id)}` },
+  });
+}
+
+async function showNotification(title, options) {
+  const notificationOptions = {
+    requireInteraction: true,
+    silent: false,
+    ...options,
+  };
+
+  if (serviceWorkerRegistration?.showNotification) {
+    await serviceWorkerRegistration.showNotification(title, notificationOptions);
+    return;
+  }
+
+  new Notification(title, notificationOptions);
+}
+
+function getNotificationTiming(schedule) {
+  const timeValue = schedule.startTime || DATE_ONLY_NOTIFICATION_TIME;
+  const [hour, minute] = timeValue.split(":").map(Number);
+  const [year, month, day] = schedule.date.split("-").map(Number);
+
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+
+  const eventTime = new Date(year, month - 1, day, hour, minute);
+  const reminderTime = new Date(eventTime.getTime() - schedule.reminderMinutes * 60 * 1000);
+  return { eventTime, reminderTime };
+}
+
+function getNotificationKey(schedule) {
+  return [
+    schedule.id,
+    schedule.date,
+    schedule.startTime || DATE_ONLY_NOTIFICATION_TIME,
+    schedule.reminderMinutes,
+  ].join("|");
+}
+
+function readNotifiedKeys() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(NOTIFIED_STORAGE_KEY) || "[]");
+    return new Set(Array.isArray(stored) ? stored : []);
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function writeNotifiedKeys(keys) {
+  const latestKeys = Array.from(keys).slice(-500);
+  localStorage.setItem(NOTIFIED_STORAGE_KEY, JSON.stringify(latestKeys));
+}
+
+function applyInitialScheduleSelection() {
+  const scheduleId = new URLSearchParams(window.location.search).get("schedule");
+  const schedule = state.schedules.find((item) => item.id === scheduleId);
+  if (!schedule) return;
+
+  state.visibleDate = startOfMonth(parseDate(schedule.date));
+  state.selectedDate = schedule.date;
+  state.view = "list";
+  elements.dateInput.value = schedule.date;
 }
 
 function sortSchedules(a, b) {
@@ -750,6 +966,23 @@ function formatTimeRange(schedule) {
   if (schedule.startTime && schedule.endTime) return `${schedule.startTime} - ${schedule.endTime}`;
   if (schedule.startTime) return schedule.startTime;
   return "시간 미정";
+}
+
+function formatReminder(minutes) {
+  if (minutes === 0) return "정시 알림";
+  if (minutes === 10) return "10분 전 알림";
+  if (minutes === 30) return "30분 전 알림";
+  if (minutes === 60) return "1시간 전 알림";
+  if (minutes === 1440) return "하루 전 알림";
+  if (minutes % 60 === 0) return `${minutes / 60}시간 전 알림`;
+  return `${minutes}분 전 알림`;
+}
+
+function parseReminderValue(value) {
+  if (value === null || value === undefined || value === "" || value === "none") return null;
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0) return null;
+  return Math.round(minutes);
 }
 
 function startOfMonth(date) {

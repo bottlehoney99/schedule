@@ -326,6 +326,45 @@ textarea:focus {
   padding-right: 2px;
 }
 
+.notice-text {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.notification-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.status-pill.is-ready {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: rgba(15, 118, 110, 0.1);
+  color: var(--primary);
+}
+
+.status-pill.is-blocked {
+  border-color: rgba(214, 74, 74, 0.24);
+  background: rgba(214, 74, 74, 0.1);
+  color: var(--danger);
+}
+
 .mini-event {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
@@ -878,7 +917,8 @@ textarea:focus {
 
 @media (max-width: 460px) {
   .form-grid,
-  .stats-grid {
+  .stats-grid,
+  .notification-actions {
     grid-template-columns: 1fr;
   }
 

@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f766e" />
     <title>학교 일정 관리</title>
+    <link rel="manifest" href="manifest.webmanifest" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -72,6 +74,18 @@
               </div>
 
               <label>
+                <span>알림</span>
+                <select id="reminderInput">
+                  <option value="none">알림 없음</option>
+                  <option value="0">정시</option>
+                  <option value="10" selected>10분 전</option>
+                  <option value="30">30분 전</option>
+                  <option value="60">1시간 전</option>
+                  <option value="1440">하루 전</option>
+                </select>
+              </label>
+
+              <label>
                 <span>메모</span>
                 <textarea id="memoInput" maxlength="240" rows="4" placeholder="준비물, 전달 사항, 관련 학급 등을 적어두세요."></textarea>
               </label>
@@ -89,6 +103,18 @@
               <button class="ghost-button" id="clearCompletedButton" type="button">완료 정리</button>
             </div>
             <div class="stats-grid" id="statsGrid"></div>
+          </section>
+
+          <section class="section-block notification-block">
+            <div class="section-heading">
+              <h2>알림</h2>
+              <span class="status-pill" id="notificationStatus">확인 중</span>
+            </div>
+            <p class="notice-text">시작 시간이 없는 일정은 오전 8시 기준으로 알림을 보냅니다.</p>
+            <div class="notification-actions">
+              <button class="ghost-button" id="notificationButton" type="button">알림 허용</button>
+              <button class="ghost-button" id="testNotificationButton" type="button">테스트</button>
+            </div>
           </section>
 
           <section class="section-block upcoming-block">
