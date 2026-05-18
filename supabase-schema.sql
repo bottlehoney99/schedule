@@ -64,3 +64,52 @@ using (true);
 create index if not exists schedules_date_idx on public.schedules (date);
 create index if not exists schedules_category_idx on public.schedules (category);
 create index if not exists schedules_completed_idx on public.schedules (completed);
+
+create table if not exists public.work_tasks (
+  id text primary key,
+  category text not null check (category in ('homeroom', 'department', 'subject')),
+  title text not null,
+  start_date date not null,
+  end_date date not null,
+  memo text not null default '',
+  completed boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (end_date >= start_date)
+);
+
+alter table public.work_tasks enable row level security;
+
+drop policy if exists "Public read work tasks" on public.work_tasks;
+drop policy if exists "Public insert work tasks" on public.work_tasks;
+drop policy if exists "Public update work tasks" on public.work_tasks;
+drop policy if exists "Public delete work tasks" on public.work_tasks;
+
+create policy "Public read work tasks"
+on public.work_tasks
+for select
+to anon
+using (true);
+
+create policy "Public insert work tasks"
+on public.work_tasks
+for insert
+to anon
+with check (true);
+
+create policy "Public update work tasks"
+on public.work_tasks
+for update
+to anon
+using (true)
+with check (true);
+
+create policy "Public delete work tasks"
+on public.work_tasks
+for delete
+to anon
+using (true);
+
+create index if not exists work_tasks_period_idx on public.work_tasks (start_date, end_date);
+create index if not exists work_tasks_category_idx on public.work_tasks (category);
+create index if not exists work_tasks_completed_idx on public.work_tasks (completed);

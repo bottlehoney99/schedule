@@ -105,6 +105,52 @@
             <div class="stats-grid" id="statsGrid"></div>
           </section>
 
+          <section class="section-block task-form-block">
+            <div class="section-heading">
+              <h2 id="taskFormTitle">기간 업무</h2>
+              <button class="ghost-button hidden" id="cancelTaskEditButton" type="button">편집 취소</button>
+            </div>
+
+            <form class="schedule-form" id="taskForm">
+              <input id="editingTaskId" type="hidden" />
+
+              <label>
+                <span>분류</span>
+                <select id="taskCategoryInput" required>
+                  <option value="homeroom">담임 업무</option>
+                  <option value="department">부서 업무</option>
+                  <option value="subject">교과교사 업무</option>
+                </select>
+              </label>
+
+              <label>
+                <span>업무명</span>
+                <input id="taskTitleInput" type="text" maxlength="80" placeholder="예: 수행평가 채점 및 입력" required />
+              </label>
+
+              <div class="form-grid">
+                <label>
+                  <span>시작일</span>
+                  <input id="taskStartDateInput" type="date" required />
+                </label>
+                <label>
+                  <span>마감일</span>
+                  <input id="taskEndDateInput" type="date" required />
+                </label>
+              </div>
+
+              <label>
+                <span>메모</span>
+                <textarea id="taskMemoInput" maxlength="240" rows="3" placeholder="처리 기준, 필요한 자료, 관련 학급 등을 적어두세요."></textarea>
+              </label>
+
+              <button class="primary-button" type="submit">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+                <span id="taskSubmitLabel">업무 추가</span>
+              </button>
+            </form>
+          </section>
+
           <section class="section-block notification-block">
             <div class="section-heading">
               <h2>알림</h2>
@@ -153,7 +199,7 @@
           <div class="filter-row">
             <label class="search-box">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" /></svg>
-              <input id="searchInput" type="search" placeholder="일정명, 장소, 메모 검색" />
+              <input id="searchInput" type="search" placeholder="일정명, 업무명, 장소, 메모 검색" />
             </label>
 
             <div class="category-tabs" role="group" aria-label="분류 필터">
@@ -186,6 +232,20 @@
           <div class="list-view hidden" id="listView">
             <div class="agenda-list" id="agendaList"></div>
           </div>
+
+          <section class="task-board" aria-label="기간 업무 목록">
+            <div class="task-board-heading">
+              <div>
+                <h2>기간 업무</h2>
+                <p>선택한 달과 겹치는 업무를 표시합니다.</p>
+              </div>
+              <div class="task-board-actions">
+                <button class="ghost-button" id="showOpenTasksButton" type="button">미완료</button>
+                <button class="ghost-button" id="showAllTasksButton" type="button">전체</button>
+              </div>
+            </div>
+            <div class="task-list" id="taskList"></div>
+          </section>
         </section>
       </main>
     </div>
@@ -210,6 +270,32 @@
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 20 9-9-8-8-9 9-1 9 9-1ZM14 5l5 5" /></svg>
           </button>
           <button class="icon-button delete-event" type="button" aria-label="삭제" title="삭제">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15" /></svg>
+          </button>
+        </div>
+      </article>
+    </template>
+
+    <template id="taskTemplate">
+      <article class="task-item">
+        <div class="task-marker"></div>
+        <div class="task-content">
+          <div class="event-topline">
+            <span class="event-category task-category"></span>
+            <span class="task-status"></span>
+          </div>
+          <h3></h3>
+          <p class="event-meta task-period"></p>
+          <p class="event-memo task-memo"></p>
+        </div>
+        <div class="event-actions">
+          <button class="icon-button complete-task" type="button" aria-label="업무 완료" title="업무 완료">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5" /></svg>
+          </button>
+          <button class="icon-button edit-task" type="button" aria-label="수정" title="수정">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 20 9-9-8-8-9 9-1 9 9-1ZM14 5l5 5" /></svg>
+          </button>
+          <button class="icon-button delete-task" type="button" aria-label="삭제" title="삭제">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15" /></svg>
           </button>
         </div>

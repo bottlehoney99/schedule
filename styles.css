@@ -632,6 +632,47 @@ textarea:focus {
   gap: 10px;
 }
 
+.task-board {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.task-board-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.task-board-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.task-board-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.task-board-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.task-board-actions .ghost-button.active {
+  background: #122033;
+  border-color: #122033;
+  color: #fff;
+}
+
+.task-list {
+  display: grid;
+  gap: 10px;
+}
+
 .agenda-day {
   display: grid;
   gap: 8px;
@@ -657,7 +698,8 @@ textarea:focus {
   font-weight: 800;
 }
 
-.event-item {
+.event-item,
+.task-item {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;
   gap: 12px;
@@ -668,19 +710,23 @@ textarea:focus {
   background: #fff;
 }
 
-.event-item.is-completed {
+.event-item.is-completed,
+.task-item.is-completed {
   opacity: 0.62;
 }
 
-.event-item.is-completed h3 {
+.event-item.is-completed h3,
+.task-item.is-completed h3 {
   text-decoration: line-through;
 }
 
-.event-marker {
+.event-marker,
+.task-marker {
   height: 100%;
 }
 
-.event-content {
+.event-content,
+.task-content {
   min-width: 0;
 }
 
@@ -708,9 +754,11 @@ textarea:focus {
   font-weight: 800;
 }
 
-.event-item h3 {
+.event-item h3,
+.task-item h3 {
   margin: 0;
   font-size: 1rem;
+  overflow-wrap: anywhere;
 }
 
 .event-meta,
@@ -723,6 +771,12 @@ textarea:focus {
 
 .event-memo {
   color: #4b5563;
+}
+
+.task-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .event-actions {
@@ -773,19 +827,22 @@ textarea:focus {
 
 .homeroom,
 [data-category="homeroom"] .event-marker,
-[data-category="homeroom"] .mini-marker {
+[data-category="homeroom"] .mini-marker,
+[data-category="homeroom"] .task-marker {
   background: var(--homeroom);
 }
 
 .department,
 [data-category="department"] .event-marker,
-[data-category="department"] .mini-marker {
+[data-category="department"] .mini-marker,
+[data-category="department"] .task-marker {
   background: var(--department);
 }
 
 .subject,
 [data-category="subject"] .event-marker,
-[data-category="subject"] .mini-marker {
+[data-category="subject"] .mini-marker,
+[data-category="subject"] .task-marker {
   background: var(--subject);
 }
 
@@ -910,8 +967,25 @@ textarea:focus {
     grid-template-columns: 8px minmax(0, 1fr);
   }
 
+  .task-item {
+    grid-template-columns: 8px minmax(0, 1fr);
+  }
+
   .event-actions {
     grid-column: 2;
+  }
+
+  .task-board-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .task-board-actions {
+    width: 100%;
+  }
+
+  .task-board-actions .ghost-button {
+    flex: 1;
   }
 }
 

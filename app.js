@@ -3,6 +3,8 @@ const SUPABASE_CONFIG = window.SUPABASE_CONFIG || {};
 const SUPABASE_URL = String(SUPABASE_CONFIG.url || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = String(SUPABASE_CONFIG.anonKey || "");
 const SUPABASE_TABLE = String(SUPABASE_CONFIG.table || "schedules");
+const SUPABASE_TASK_TABLE = String(SUPABASE_CONFIG.taskTable || "work_tasks");
+const TASK_STORAGE_KEY = "personal-school-work-tasks-v1";
 const NOTIFIED_STORAGE_KEY = "personal-school-schedule-notified-v1";
 const DEFAULT_REMINDER_MINUTES = 10;
 const NOTIFICATION_CHECK_INTERVAL_MS = 30 * 1000;
@@ -25,11 +27,13 @@ const CATEGORY_SHORT_LABELS = {
 
 const state = {
   schedules: [],
+  tasks: [],
   visibleDate: startOfMonth(new Date()),
   selectedDate: toDateInputValue(new Date()),
   filter: "all",
   query: "",
   view: "calendar",
+  taskFilter: "open",
 };
 
 const elements = {
@@ -63,6 +67,19 @@ const elements = {
   exportButton: document.querySelector("#exportButton"),
   importInput: document.querySelector("#importInput"),
   clearCompletedButton: document.querySelector("#clearCompletedButton"),
+  taskForm: document.querySelector("#taskForm"),
+  editingTaskId: document.querySelector("#editingTaskId"),
+  taskFormTitle: document.querySelector("#taskFormTitle"),
+  taskSubmitLabel: document.querySelector("#taskSubmitLabel"),
+  cancelTaskEditButton: document.querySelector("#cancelTaskEditButton"),
+  taskCategoryInput: document.querySelector("#taskCategoryInput"),
+  taskTitleInput: document.querySelector("#taskTitleInput"),
+  taskStartDateInput: document.querySelector("#taskStartDateInput"),
+  taskEndDateInput: document.querySelector("#taskEndDateInput"),
+  taskMemoInput: document.querySelector("#taskMemoInput"),
+  taskList: document.querySelector("#taskList"),
+  showOpenTasksButton: document.querySelector("#showOpenTasksButton"),
+  showAllTasksButton: document.querySelector("#showAllTasksButton"),
   notificationButton: document.querySelector("#notificationButton"),
   testNotificationButton: document.querySelector("#testNotificationButton"),
   notificationStatus: document.querySelector("#notificationStatus"),
@@ -73,10 +90,14 @@ init();
 
 async function init() {
   elements.dateInput.value = state.selectedDate;
+  elements.taskStartDateInput.value = state.selectedDate;
+  elements.taskEndDateInput.value = state.selectedDate;
   elements.reminderInput.value = String(DEFAULT_REMINDER_MINUTES);
   bindEvents();
   await registerServiceWorker();
-  state.schedules = await loadSchedules();
+  const [schedules, tasks] = await Promise.all([loadSchedules(), loadTasks()]);
+  state.schedules = schedules;
+  state.tasks = tasks;
   applyInitialScheduleSelection();
   render();
   renderNotificationStatus();
@@ -104,6 +125,16 @@ function bindEvents() {
   elements.exportButton.addEventListener("click", exportSchedules);
   elements.importInput.addEventListener("change", importSchedules);
   elements.clearCompletedButton.addEventListener("click", clearCompleted);
+  elements.taskForm.addEventListener("submit", handleTaskSubmit);
+  elements.cancelTaskEditButton.addEventListener("click", resetTaskForm);
+  elements.showOpenTasksButton.addEventListener("click", () => {
+    state.taskFilter = "open";
+    renderTasks();
+  });
+  elements.showAllTasksButton.addEventListener("click", () => {
+    state.taskFilter = "all";
+    renderTasks();
+  });
   elements.notificationButton.addEventListener("click", requestNotificationPermission);
   elements.testNotificationButton.addEventListener("click", sendTestNotification);
   document.addEventListener("visibilitychange", () => {
@@ -209,6 +240,7 @@ function render() {
   renderUpcoming();
   renderCalendar();
   renderAgenda();
+  renderTasks();
 }
 
 function renderToolbar() {
@@ -239,7 +271,9 @@ function renderStats() {
     ["오늘", state.schedules.filter((schedule) => schedule.date === todayValue && !schedule.completed).length],
     ["7일 안", upcomingWeek.length],
     ["미완료", state.schedules.filter((schedule) => !schedule.completed).length],
-    ["전체", state.schedules.length],
+    ["진행 업무", state.tasks.filter((task) => !task.completed).length],
+    ["지연 업무", state.tasks.filter((task) => isTaskOverdue(task)).length],
+    ["전체 일정", state.schedules.length],
   ];
 
   elements.statsGrid.replaceChildren(
@@ -492,6 +526,170 @@ async function clearCompleted() {
   render();
 }
 
+async function handleTaskSubmit(event) {
+  event.preventDefault();
+
+  const draft = {
+    id: elements.editingTaskId.value || createId(),
+    category: elements.taskCategoryInput.value,
+    title: elements.taskTitleInput.value.trim(),
+    startDate: elements.taskStartDateInput.value,
+    endDate: elements.taskEndDateInput.value,
+    memo: elements.taskMemoInput.value.trim(),
+    completed: false,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (!draft.title || !draft.startDate || !draft.endDate) {
+    showToast("업무명과 기간을 입력하세요.");
+    return;
+  }
+
+  if (draft.endDate < draft.startDate) {
+    showToast("마감일은 시작일보다 빠를 수 없습니다.");
+    return;
+  }
+
+  const existingIndex = state.tasks.findIndex((task) => task.id === draft.id);
+  const existingTask = state.tasks[existingIndex];
+  if (existingTask) {
+    draft.completed = existingTask.completed;
+    draft.createdAt = existingTask.createdAt;
+  }
+
+  try {
+    const savedTask = await upsertTaskInDatabase(draft);
+    if (existingIndex >= 0) {
+      state.tasks.splice(existingIndex, 1, savedTask);
+      showToast("업무를 수정했습니다.");
+    } else {
+      state.tasks.push(savedTask);
+      showToast("업무를 추가했습니다.");
+    }
+    localStorage.removeItem(TASK_STORAGE_KEY);
+  } catch (error) {
+    console.error(error);
+    if (existingIndex >= 0) {
+      state.tasks.splice(existingIndex, 1, draft);
+    } else {
+      state.tasks.push(draft);
+    }
+    saveLegacyTasks();
+    showToast("Supabase 저장에 실패해 업무를 이 기기에 임시 저장했습니다.");
+  }
+
+  state.tasks.sort(sortTasks);
+  state.visibleDate = startOfMonth(parseDate(draft.startDate));
+  resetTaskForm();
+  render();
+}
+
+function resetTaskForm() {
+  const selectedDate = state.selectedDate || toDateInputValue(new Date());
+  elements.taskForm.reset();
+  elements.editingTaskId.value = "";
+  elements.taskStartDateInput.value = selectedDate;
+  elements.taskEndDateInput.value = selectedDate;
+  elements.taskFormTitle.textContent = "기간 업무";
+  elements.taskSubmitLabel.textContent = "업무 추가";
+  elements.cancelTaskEditButton.classList.add("hidden");
+}
+
+function renderTasks() {
+  elements.showOpenTasksButton.classList.toggle("active", state.taskFilter === "open");
+  elements.showAllTasksButton.classList.toggle("active", state.taskFilter === "all");
+
+  const tasks = getFilteredTasks();
+  if (!tasks.length) {
+    elements.taskList.innerHTML = `<div class="empty-state">표시할 기간 업무가 없습니다.</div>`;
+    return;
+  }
+
+  elements.taskList.replaceChildren(...tasks.map(createTaskItem));
+}
+
+function createTaskItem(task) {
+  const node = document.querySelector("#taskTemplate").content.firstElementChild.cloneNode(true);
+  node.dataset.category = task.category;
+  node.classList.toggle("is-completed", task.completed);
+  node.querySelector(".task-category").textContent = `${CATEGORY_SHORT_LABELS[task.category]} 업무`;
+  node.querySelector(".task-status").textContent = getTaskStatusText(task);
+  node.querySelector("h3").textContent = task.title;
+  node.querySelector(".task-period").textContent = `${formatDate(task.startDate)} - ${formatDate(task.endDate)}`;
+
+  const memo = node.querySelector(".task-memo");
+  memo.textContent = task.memo;
+  memo.classList.toggle("hidden", !task.memo);
+
+  const completeButton = node.querySelector(".complete-task");
+  completeButton.title = task.completed ? "완료 해제" : "업무 완료";
+  completeButton.setAttribute("aria-label", completeButton.title);
+  completeButton.addEventListener("click", () => toggleTaskComplete(task.id));
+  node.querySelector(".edit-task").addEventListener("click", () => editTask(task.id));
+  node.querySelector(".delete-task").addEventListener("click", () => deleteTask(task.id));
+
+  return node;
+}
+
+function editTask(id) {
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task) return;
+
+  elements.editingTaskId.value = task.id;
+  elements.taskCategoryInput.value = task.category;
+  elements.taskTitleInput.value = task.title;
+  elements.taskStartDateInput.value = task.startDate;
+  elements.taskEndDateInput.value = task.endDate;
+  elements.taskMemoInput.value = task.memo;
+  elements.taskFormTitle.textContent = "업무 수정";
+  elements.taskSubmitLabel.textContent = "수정 저장";
+  elements.cancelTaskEditButton.classList.remove("hidden");
+  state.visibleDate = startOfMonth(parseDate(task.startDate));
+  render();
+  elements.taskTitleInput.focus();
+}
+
+async function deleteTask(id) {
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task) return;
+
+  const confirmed = window.confirm(`"${task.title}" 업무를 삭제할까요?`);
+  if (!confirmed) return;
+
+  state.tasks = state.tasks.filter((item) => item.id !== id);
+  try {
+    await deleteTaskFromDatabase(id);
+    localStorage.removeItem(TASK_STORAGE_KEY);
+    showToast("업무를 삭제했습니다.");
+  } catch (error) {
+    console.error(error);
+    saveLegacyTasks();
+    showToast("Supabase 삭제에 실패해 업무를 이 기기에 임시 반영했습니다.");
+  }
+
+  resetTaskForm();
+  render();
+}
+
+async function toggleTaskComplete(id) {
+  const changedTask = state.tasks.find((task) => task.id === id);
+  if (!changedTask) return;
+
+  const updatedTask = { ...changedTask, completed: !changedTask.completed };
+  state.tasks = state.tasks.map((task) => (task.id === id ? updatedTask : task));
+
+  try {
+    await updateTaskInDatabase(updatedTask);
+    localStorage.removeItem(TASK_STORAGE_KEY);
+  } catch (error) {
+    console.error(error);
+    saveLegacyTasks();
+    showToast("Supabase 저장에 실패해 업무를 이 기기에 임시 반영했습니다.");
+  }
+
+  render();
+}
+
 function getFilteredSchedules() {
   return state.schedules.filter((schedule) => {
     const matchesCategory = state.filter === "all" || schedule.category === state.filter;
@@ -503,11 +701,28 @@ function getFilteredSchedules() {
   });
 }
 
+function getFilteredTasks() {
+  const monthStart = startOfMonth(state.visibleDate);
+  const monthEnd = new Date(state.visibleDate.getFullYear(), state.visibleDate.getMonth() + 1, 0);
+
+  return state.tasks
+    .filter((task) => {
+      const matchesCategory = state.filter === "all" || task.category === state.filter;
+      const haystack = [task.title, task.memo, CATEGORY_LABELS[task.category]].join(" ").toLowerCase();
+      const matchesQuery = !state.query || haystack.includes(state.query);
+      const overlapsMonth = parseDate(task.startDate) <= monthEnd && parseDate(task.endDate) >= monthStart;
+      const matchesTaskFilter = state.taskFilter === "all" || !task.completed;
+      return matchesCategory && matchesQuery && overlapsMonth && matchesTaskFilter;
+    })
+    .sort(sortTasks);
+}
+
 function exportSchedules() {
   const payload = JSON.stringify(
     {
       exportedAt: new Date().toISOString(),
       schedules: state.schedules,
+      tasks: state.tasks,
     },
     null,
     2,
@@ -531,31 +746,46 @@ function importSchedules(event) {
     try {
       const parsed = JSON.parse(String(reader.result));
       const imported = Array.isArray(parsed) ? parsed : parsed.schedules;
+      const importedTasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
       if (!Array.isArray(imported)) throw new Error("Invalid schedule file");
 
       const normalized = imported
         .map(normalizeSchedule)
         .filter((schedule) => schedule.title && schedule.date && CATEGORY_LABELS[schedule.category]);
+      const normalizedTasks = importedTasks
+        .map(normalizeTask)
+        .filter((task) => task.title && task.startDate && task.endDate && CATEGORY_LABELS[task.category]);
 
-      const savedSchedules = await upsertSchedulesInDatabase(normalized);
+      const [savedSchedules, savedTasks] = await Promise.all([
+        upsertSchedulesInDatabase(normalized),
+        upsertTasksInDatabase(normalizedTasks),
+      ]);
       state.schedules = mergeSchedules(state.schedules, savedSchedules);
+      state.tasks = mergeTasks(state.tasks, savedTasks);
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(TASK_STORAGE_KEY);
       render();
-      showToast(`${normalized.length}개 일정을 가져왔습니다.`);
+      showToast(`${normalized.length}개 일정과 ${normalizedTasks.length}개 업무를 가져왔습니다.`);
     } catch (error) {
       console.error(error);
       try {
         const parsed = JSON.parse(String(reader.result));
         const imported = Array.isArray(parsed) ? parsed : parsed.schedules;
+        const importedTasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
         const normalized = Array.isArray(imported)
           ? imported
               .map(normalizeSchedule)
               .filter((schedule) => schedule.title && schedule.date && CATEGORY_LABELS[schedule.category])
           : [];
+        const normalizedTasks = importedTasks
+          .map(normalizeTask)
+          .filter((task) => task.title && task.startDate && task.endDate && CATEGORY_LABELS[task.category]);
 
-        if (!normalized.length) throw new Error("Invalid schedule file");
+        if (!normalized.length && !normalizedTasks.length) throw new Error("Invalid schedule file");
         state.schedules = mergeSchedules(state.schedules, normalized);
+        state.tasks = mergeTasks(state.tasks, normalizedTasks);
         saveLegacySchedules();
+        saveLegacyTasks();
         render();
         showToast("Supabase 가져오기에 실패해 이 기기에 임시 저장했습니다.");
       } catch (fallbackError) {
@@ -572,6 +802,12 @@ function mergeSchedules(current, imported) {
   const byId = new Map(current.map((schedule) => [schedule.id, schedule]));
   imported.forEach((schedule) => byId.set(schedule.id, schedule));
   return Array.from(byId.values()).sort(sortSchedules);
+}
+
+function mergeTasks(current, imported) {
+  const byId = new Map(current.map((task) => [task.id, task]));
+  imported.forEach((task) => byId.set(task.id, task));
+  return Array.from(byId.values()).sort(sortTasks);
 }
 
 async function loadSchedules() {
@@ -605,6 +841,42 @@ function loadLegacySchedules() {
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
     return parsed.map(normalizeSchedule).filter((schedule) => schedule.title && schedule.date).sort(sortSchedules);
+  } catch (error) {
+    return [];
+  }
+}
+
+async function loadTasks() {
+  try {
+    const databaseTasks = await readAllTasksFromDatabase();
+    const normalized = databaseTasks
+      .map(normalizeTask)
+      .filter((task) => task.title && task.startDate && task.endDate);
+
+    const legacyTasks = loadLegacyTasks();
+    if (!normalized.length && legacyTasks.length) {
+      await upsertTasksInDatabase(legacyTasks);
+      localStorage.removeItem(TASK_STORAGE_KEY);
+      showToast("기존 저장 업무를 Supabase로 옮겼습니다.");
+      return legacyTasks.sort(sortTasks);
+    }
+
+    localStorage.removeItem(TASK_STORAGE_KEY);
+    return normalized.sort(sortTasks);
+  } catch (error) {
+    console.error(error);
+    showToast("업무 DB에 연결할 수 없어 임시 저장소를 사용합니다.");
+    return loadLegacyTasks();
+  }
+}
+
+function loadLegacyTasks() {
+  try {
+    const stored = localStorage.getItem(TASK_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeTask).filter((task) => task.title && task.startDate && task.endDate).sort(sortTasks);
   } catch (error) {
     return [];
   }
@@ -652,6 +924,46 @@ async function deleteScheduleFromDatabase(id) {
 
 async function deleteCompletedSchedulesFromDatabase() {
   await supabaseRequest(`${SUPABASE_TABLE}?completed=eq.true`, {
+    method: "DELETE",
+    headers: { Prefer: "return=minimal" },
+  });
+}
+
+async function readAllTasksFromDatabase() {
+  const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?select=*&order=end_date.asc,start_date.asc,title.asc`);
+  return rows.map(taskFromDatabase);
+}
+
+async function upsertTaskInDatabase(task) {
+  const savedTasks = await upsertTasksInDatabase([task]);
+  return savedTasks[0] || normalizeTask(task);
+}
+
+async function updateTaskInDatabase(task) {
+  const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(task.id)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(taskToDatabase(task)),
+  });
+
+  return rows[0] ? taskFromDatabase(rows[0]) : normalizeTask(task);
+}
+
+async function upsertTasksInDatabase(tasks) {
+  const normalized = tasks.map(normalizeTask);
+  if (!normalized.length) return [];
+
+  const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?on_conflict=id`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(normalized.map(taskToDatabase)),
+  });
+
+  return rows.map(taskFromDatabase);
+}
+
+async function deleteTaskFromDatabase(id) {
+  await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: { Prefer: "return=minimal" },
   });
@@ -728,6 +1040,35 @@ function scheduleToDatabase(schedule) {
   };
 }
 
+function taskFromDatabase(row) {
+  return normalizeTask({
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    memo: row.memo,
+    completed: row.completed,
+    createdAt: row.created_at,
+  });
+}
+
+function taskToDatabase(task) {
+  const normalized = normalizeTask(task);
+
+  return {
+    id: normalized.id,
+    category: normalized.category,
+    title: normalized.title,
+    start_date: normalized.startDate,
+    end_date: normalized.endDate,
+    memo: normalized.memo,
+    completed: normalized.completed,
+    created_at: normalized.createdAt,
+    updated_at: new Date().toISOString(),
+  };
+}
+
 function normalizeSchedule(schedule) {
   return {
     id: typeof schedule.id === "string" ? schedule.id : createId(),
@@ -744,10 +1085,29 @@ function normalizeSchedule(schedule) {
   };
 }
 
+function normalizeTask(task) {
+  return {
+    id: typeof task.id === "string" ? task.id : createId(),
+    category: CATEGORY_LABELS[task.category] ? task.category : "homeroom",
+    title: String(task.title || "").trim(),
+    startDate: String(task.startDate || task.start_date || ""),
+    endDate: String(task.endDate || task.end_date || ""),
+    memo: String(task.memo || "").trim(),
+    completed: Boolean(task.completed),
+    createdAt: task.createdAt || task.created_at || new Date().toISOString(),
+  };
+}
+
 function saveLegacySchedules() {
   const normalized = state.schedules.map(normalizeSchedule).sort(sortSchedules);
   state.schedules = normalized;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+}
+
+function saveLegacyTasks() {
+  const normalized = state.tasks.map(normalizeTask).sort(sortTasks);
+  state.tasks = normalized;
+  localStorage.setItem(TASK_STORAGE_KEY, JSON.stringify(normalized));
 }
 
 async function registerServiceWorker() {
@@ -946,6 +1306,32 @@ function sortSchedules(a, b) {
   );
 }
 
+function sortTasks(a, b) {
+  return (
+    Number(a.completed) - Number(b.completed) ||
+    a.endDate.localeCompare(b.endDate) ||
+    a.startDate.localeCompare(b.startDate) ||
+    a.title.localeCompare(b.title, "ko")
+  );
+}
+
+function isTaskOverdue(task) {
+  return !task.completed && parseDate(task.endDate) < parseDate(toDateInputValue(new Date()));
+}
+
+function getTaskStatusText(task) {
+  if (task.completed) return "완료";
+
+  const today = parseDate(toDateInputValue(new Date()));
+  const startDate = parseDate(task.startDate);
+  const endDate = parseDate(task.endDate);
+
+  if (today < startDate) return `${daysBetween(today, startDate)}일 후 시작`;
+  if (today > endDate) return `${daysBetween(endDate, today)}일 지연`;
+  if (toDateInputValue(today) === task.endDate) return "오늘 마감";
+  return `D-${daysBetween(today, endDate)}`;
+}
+
 function groupByDate(schedules) {
   return schedules.reduce((groups, schedule) => {
     if (!groups[schedule.date]) groups[schedule.date] = [];
@@ -993,6 +1379,15 @@ function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function daysBetween(start, end) {
+  const oneDay = 24 * 60 * 60 * 1000;
+  return Math.round((startOfDay(end).getTime() - startOfDay(start).getTime()) / oneDay);
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function parseDate(value) {
