@@ -622,9 +622,22 @@ textarea:focus {
 
 .more-count {
   margin: 3px 0 0 13px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 800;
+  padding: 0;
+  text-align: left;
+}
+
+.more-count:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.day-cell.is-expanded {
+  min-height: 190px;
 }
 
 .agenda-list {

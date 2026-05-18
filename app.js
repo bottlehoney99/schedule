@@ -34,6 +34,7 @@ const state = {
   query: "",
   view: "calendar",
   taskFilter: "open",
+  expandedCalendarDates: new Set(),
 };
 
 const elements = {
@@ -327,17 +328,20 @@ function renderCalendar() {
   const firstCell = addDays(monthStart, -monthStart.getDay());
   const cells = Array.from({ length: 42 }, (_, index) => addDays(firstCell, index));
   const todayValue = toDateInputValue(new Date());
-  const filtered = getFilteredSchedules();
+  const filtered = getFilteredSchedules().filter((schedule) => !schedule.completed);
 
   elements.calendarGrid.replaceChildren(
     ...cells.map((date) => {
       const dateValue = toDateInputValue(date);
       const daySchedules = filtered.filter((schedule) => schedule.date === dateValue).sort(sortSchedules);
+      const isExpanded = state.expandedCalendarDates.has(dateValue);
+      const visibleSchedules = isExpanded ? daySchedules : daySchedules.slice(0, 4);
       const cell = document.createElement("div");
       cell.className = "day-cell";
       cell.classList.toggle("is-muted", date.getMonth() !== state.visibleDate.getMonth());
       cell.classList.toggle("is-today", dateValue === todayValue);
       cell.classList.toggle("is-selected", dateValue === state.selectedDate);
+      cell.classList.toggle("is-expanded", isExpanded);
 
       const button = document.createElement("button");
       button.type = "button";
@@ -352,7 +356,7 @@ function renderCalendar() {
 
       const events = document.createElement("div");
       events.className = "day-events";
-      daySchedules.slice(0, 4).forEach((schedule) => {
+      visibleSchedules.forEach((schedule) => {
         const eventButton = document.createElement("button");
         eventButton.type = "button";
         eventButton.className = `day-event ${schedule.category}`;
@@ -368,9 +372,19 @@ function renderCalendar() {
       });
 
       if (daySchedules.length > 4) {
-        const more = document.createElement("p");
+        const more = document.createElement("button");
+        more.type = "button";
         more.className = "more-count";
-        more.textContent = `+${daySchedules.length - 4}개 더`;
+        more.textContent = isExpanded ? "접기" : `+${daySchedules.length - 4}개 더`;
+        more.setAttribute("aria-label", isExpanded ? "일정 접기" : `${daySchedules.length - 4}개 일정 더 보기`);
+        more.addEventListener("click", () => {
+          if (isExpanded) {
+            state.expandedCalendarDates.delete(dateValue);
+          } else {
+            state.expandedCalendarDates.add(dateValue);
+          }
+          renderCalendar();
+        });
         events.append(more);
       }
 
@@ -1158,7 +1172,7 @@ async function sendTestNotification() {
 
   await showNotification("학교 일정 테스트 알림", {
     body: "Windows와 휴대폰 브라우저에서 이런 형태로 일정 알림이 표시됩니다.",
-    tag: "school-schedule-test",
+    tag: `school-schedule-test-${Date.now()}`,
   });
   showToast("테스트 알림을 보냈습니다.");
 }
@@ -1228,7 +1242,7 @@ async function checkDueNotifications() {
 async function showScheduleNotification(schedule) {
   const timeText = formatTimeRange(schedule);
   const placeText = schedule.place ? ` · ${schedule.place}` : "";
-  const reminderText = schedule.reminderMinutes === 0 ? "정시 알림" : `${formatReminder(schedule.reminderMinutes)} 알림`;
+  const reminderText = formatReminder(schedule.reminderMinutes);
 
   await showNotification(`일정 알림: ${schedule.title}`, {
     body: `${formatDate(schedule.date)} ${timeText}${placeText}\n${CATEGORY_LABELS[schedule.category]} · ${reminderText}`,
@@ -1241,6 +1255,7 @@ async function showNotification(title, options) {
   const notificationOptions = {
     requireInteraction: true,
     silent: false,
+    timestamp: Date.now(),
     ...options,
   };
 
