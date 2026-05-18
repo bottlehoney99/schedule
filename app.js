@@ -9,9 +9,12 @@ const NOTIFIED_STORAGE_KEY = "personal-school-schedule-notified-v1";
 const DEFAULT_REMINDER_MINUTES = 10;
 const NOTIFICATION_CHECK_INTERVAL_MS = 30 * 1000;
 const DATE_ONLY_NOTIFICATION_TIME = "08:00";
+const TASK_ROW_MARKER = "__WORK_TASK__";
+const TASK_ID_PREFIX = "task:";
 
 let notificationTimer = null;
 let serviceWorkerRegistration = null;
+let taskStorageAdapter = null;
 
 const CATEGORY_LABELS = {
   homeroom: "담임 일정",
@@ -375,9 +378,11 @@ function renderCalendar() {
         const more = document.createElement("button");
         more.type = "button";
         more.className = "more-count";
+        more.classList.toggle("is-expanded", isExpanded);
         more.textContent = isExpanded ? "접기" : `+${daySchedules.length - 4}개 더`;
         more.setAttribute("aria-label", isExpanded ? "일정 접기" : `${daySchedules.length - 4}개 일정 더 보기`);
-        more.addEventListener("click", () => {
+        more.addEventListener("click", (event) => {
+          event.stopPropagation();
           if (isExpanded) {
             state.expandedCalendarDates.delete(dateValue);
           } else {
@@ -898,7 +903,7 @@ function loadLegacyTasks() {
 
 async function readAllSchedulesFromDatabase() {
   const rows = await supabaseRequest(`${SUPABASE_TABLE}?select=*&order=date.asc,start_time.asc,title.asc`);
-  return rows.map(scheduleFromDatabase);
+  return rows.filter((row) => !isTaskScheduleRow(row)).map(scheduleFromDatabase);
 }
 
 async function upsertScheduleInDatabase(schedule) {
@@ -937,15 +942,28 @@ async function deleteScheduleFromDatabase(id) {
 }
 
 async function deleteCompletedSchedulesFromDatabase() {
-  await supabaseRequest(`${SUPABASE_TABLE}?completed=eq.true`, {
+  const taskRowFilter = taskStorageAdapter === "scheduleRows"
+    ? `&place=neq.${encodeURIComponent(TASK_ROW_MARKER)}`
+    : "";
+
+  await supabaseRequest(`${SUPABASE_TABLE}?completed=eq.true${taskRowFilter}`, {
     method: "DELETE",
     headers: { Prefer: "return=minimal" },
   });
 }
 
 async function readAllTasksFromDatabase() {
-  const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?select=*&order=end_date.asc,start_date.asc,title.asc`);
-  return rows.map(taskFromDatabase);
+  if (taskStorageAdapter === "scheduleRows") return readAllTasksFromScheduleRows();
+
+  try {
+    const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?select=*&order=end_date.asc,start_date.asc,title.asc`);
+    taskStorageAdapter = "workTasks";
+    return rows.map(taskFromDatabase);
+  } catch (error) {
+    if (!isMissingTaskTableError(error)) throw error;
+    taskStorageAdapter = "scheduleRows";
+    return readAllTasksFromScheduleRows();
+  }
 }
 
 async function upsertTaskInDatabase(task) {
@@ -954,11 +972,20 @@ async function upsertTaskInDatabase(task) {
 }
 
 async function updateTaskInDatabase(task) {
-  const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(task.id)}`, {
-    method: "PATCH",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(taskToDatabase(task)),
-  });
+  if (taskStorageAdapter === "scheduleRows") return updateTaskScheduleRow(task);
+
+  let rows;
+  try {
+    rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(task.id)}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(taskToDatabase(task)),
+    });
+  } catch (error) {
+    if (!isMissingTaskTableError(error)) throw error;
+    taskStorageAdapter = "scheduleRows";
+    return updateTaskScheduleRow(task);
+  }
 
   return rows[0] ? taskFromDatabase(rows[0]) : normalizeTask(task);
 }
@@ -967,17 +994,73 @@ async function upsertTasksInDatabase(tasks) {
   const normalized = tasks.map(normalizeTask);
   if (!normalized.length) return [];
 
-  const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?on_conflict=id`, {
-    method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-    body: JSON.stringify(normalized.map(taskToDatabase)),
-  });
+  if (taskStorageAdapter === "scheduleRows") return upsertTasksAsScheduleRows(normalized);
 
-  return rows.map(taskFromDatabase);
+  try {
+    const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?on_conflict=id`, {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+      body: JSON.stringify(normalized.map(taskToDatabase)),
+    });
+    taskStorageAdapter = "workTasks";
+    return rows.map(taskFromDatabase);
+  } catch (error) {
+    if (!isMissingTaskTableError(error)) throw error;
+    taskStorageAdapter = "scheduleRows";
+    return upsertTasksAsScheduleRows(normalized);
+  }
 }
 
 async function deleteTaskFromDatabase(id) {
-  await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+  if (taskStorageAdapter === "scheduleRows") {
+    await deleteTaskScheduleRow(id);
+    return;
+  }
+
+  try {
+    await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { Prefer: "return=minimal" },
+    });
+  } catch (error) {
+    if (!isMissingTaskTableError(error)) throw error;
+    taskStorageAdapter = "scheduleRows";
+    await deleteTaskScheduleRow(id);
+  }
+}
+
+async function readAllTasksFromScheduleRows() {
+  const rows = await supabaseRequest(
+    `${SUPABASE_TABLE}?select=*&place=eq.${encodeURIComponent(TASK_ROW_MARKER)}&order=date.asc,title.asc`,
+  );
+  return rows.map(taskFromScheduleRow);
+}
+
+async function upsertTasksAsScheduleRows(tasks) {
+  const normalized = tasks.map(normalizeTask);
+  if (!normalized.length) return [];
+
+  const rows = await supabaseRequest(`${SUPABASE_TABLE}?on_conflict=id`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(normalized.map(taskToScheduleRow)),
+  });
+
+  return rows.map(taskFromScheduleRow);
+}
+
+async function updateTaskScheduleRow(task) {
+  const rows = await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(getDatabaseTaskId(task.id))}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(taskToScheduleRow(task)),
+  });
+
+  return rows[0] ? taskFromScheduleRow(rows[0]) : normalizeTask(task);
+}
+
+async function deleteTaskScheduleRow(id) {
+  await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(getDatabaseTaskId(id))}`, {
     method: "DELETE",
     headers: { Prefer: "return=minimal" },
   });
@@ -1081,6 +1164,73 @@ function taskToDatabase(task) {
     created_at: normalized.createdAt,
     updated_at: new Date().toISOString(),
   };
+}
+
+function taskFromScheduleRow(row) {
+  const payload = parseTaskRowPayload(row.memo);
+
+  return normalizeTask({
+    id: getAppTaskId(row.id),
+    category: row.category,
+    title: row.title,
+    startDate: payload.startDate || row.date,
+    endDate: payload.endDate || row.date,
+    memo: payload.memo || "",
+    completed: row.completed,
+    createdAt: row.created_at,
+  });
+}
+
+function taskToScheduleRow(task) {
+  const normalized = normalizeTask(task);
+
+  return {
+    id: getDatabaseTaskId(normalized.id),
+    category: normalized.category,
+    title: normalized.title,
+    date: normalized.endDate,
+    start_time: "",
+    end_time: "",
+    place: TASK_ROW_MARKER,
+    memo: JSON.stringify({
+      marker: TASK_ROW_MARKER,
+      startDate: normalized.startDate,
+      endDate: normalized.endDate,
+      memo: normalized.memo,
+    }),
+    reminder_minutes: null,
+    completed: normalized.completed,
+    created_at: normalized.createdAt,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function parseTaskRowPayload(value) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed?.marker === TASK_ROW_MARKER ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function isTaskScheduleRow(row) {
+  return row.place === TASK_ROW_MARKER || String(row.id || "").startsWith(TASK_ID_PREFIX);
+}
+
+function getDatabaseTaskId(id) {
+  const value = String(id || createId());
+  return value.startsWith(TASK_ID_PREFIX) ? value : `${TASK_ID_PREFIX}${value}`;
+}
+
+function getAppTaskId(id) {
+  const value = String(id || createId());
+  return value.startsWith(TASK_ID_PREFIX) ? value.slice(TASK_ID_PREFIX.length) : value;
+}
+
+function isMissingTaskTableError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("PGRST205") || message.includes(`'public.${SUPABASE_TASK_TABLE}'`);
 }
 
 function normalizeSchedule(schedule) {
