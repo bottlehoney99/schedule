@@ -56,14 +56,22 @@ const PERSON_CATEGORY_PROFILES = {
     labels: {
       homeroom: "여가 일정",
       subject: "상담 일정",
-      department: "부서 일정",
+      department: "업무 일정",
+      training: "연수 일정",
     },
     shortLabels: {
       homeroom: "여가",
       subject: "상담",
-      department: "부서",
+      department: "업무",
+      training: "연수",
     },
-    order: ["homeroom", "subject", "department"],
+    taskLabels: {
+      homeroom: "여가 업무",
+      subject: "상담 업무",
+      department: "업무",
+      training: "연수 업무",
+    },
+    order: ["homeroom", "subject", "department", "training"],
   },
 };
 
@@ -244,13 +252,10 @@ function setupCategoryShell() {
   const order = getCategoryOrder();
 
   updateCategorySelect(elements.categoryInput, labels, order);
-  updateCategorySelect(
-    elements.taskCategoryInput,
-    Object.fromEntries(order.map((category) => [category, `${shortLabels[category]} 업무`])),
-    order,
-  );
+  updateCategorySelect(elements.taskCategoryInput, getTaskCategoryLabels(), order);
   updateCategoryTabs(shortLabels, order);
   updateLegend(labels, order);
+  elements.categoryTabs = document.querySelectorAll(".category-tab");
 }
 
 function updateCategorySelect(select, labels, order) {
@@ -258,8 +263,11 @@ function updateCategorySelect(select, labels, order) {
 
   const optionsByValue = new Map(Array.from(select.options).map((option) => [option.value, option]));
   order.forEach((category) => {
-    const option = optionsByValue.get(category);
-    if (!option) return;
+    let option = optionsByValue.get(category);
+    if (!option) {
+      option = document.createElement("option");
+      option.value = category;
+    }
 
     option.textContent = labels[category];
     select.append(option);
@@ -278,8 +286,13 @@ function updateCategoryTabs(shortLabels, order) {
   }
 
   order.forEach((category) => {
-    const tab = tabs.find((item) => item.dataset.filter === category);
-    if (!tab) return;
+    let tab = tabs.find((item) => item.dataset.filter === category);
+    if (!tab) {
+      tab = document.createElement("button");
+      tab.className = "category-tab";
+      tab.type = "button";
+      tab.dataset.filter = category;
+    }
 
     tab.textContent = shortLabels[category];
     parent.append(tab);
@@ -996,7 +1009,7 @@ function createTaskItem(task) {
   const node = document.querySelector("#taskTemplate").content.firstElementChild.cloneNode(true);
   node.dataset.category = task.category;
   node.classList.toggle("is-completed", task.completed);
-  node.querySelector(".task-category").textContent = `${getCategoryShortLabel(task.category)} 업무`;
+  node.querySelector(".task-category").textContent = getTaskCategoryLabel(task.category);
   node.querySelector(".task-status").textContent = getTaskStatusText(task);
   node.querySelector("h3").textContent = task.title;
   node.querySelector(".task-period").textContent = `${formatDate(task.startDate)} - ${formatDate(task.endDate)}`;
@@ -1135,10 +1148,10 @@ function importSchedules(event) {
 
       const normalized = imported
         .map(normalizeSchedule)
-        .filter((schedule) => schedule.title && schedule.date && CATEGORY_LABELS[schedule.category]);
+        .filter((schedule) => schedule.title && schedule.date && isKnownCategory(schedule.category));
       const normalizedTasks = importedTasks
         .map(normalizeTask)
-        .filter((task) => task.title && task.startDate && task.endDate && CATEGORY_LABELS[task.category]);
+        .filter((task) => task.title && task.startDate && task.endDate && isKnownCategory(task.category));
 
       const [savedSchedules, savedTasks] = await Promise.all([
         upsertSchedulesInDatabase(normalized),
@@ -1159,11 +1172,11 @@ function importSchedules(event) {
         const normalized = Array.isArray(imported)
           ? imported
               .map(normalizeSchedule)
-              .filter((schedule) => schedule.title && schedule.date && CATEGORY_LABELS[schedule.category])
+              .filter((schedule) => schedule.title && schedule.date && isKnownCategory(schedule.category))
           : [];
         const normalizedTasks = importedTasks
           .map(normalizeTask)
-          .filter((task) => task.title && task.startDate && task.endDate && CATEGORY_LABELS[task.category]);
+          .filter((task) => task.title && task.startDate && task.endDate && isKnownCategory(task.category));
 
         if (!normalized.length && !normalizedTasks.length) throw new Error("Invalid schedule file");
         state.schedules = mergeSchedules(state.schedules, normalized);
@@ -1649,6 +1662,14 @@ function getCategoryShortLabels() {
   return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.shortLabels || CATEGORY_SHORT_LABELS;
 }
 
+function getTaskCategoryLabels() {
+  const profileLabels = PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.taskLabels;
+  if (profileLabels) return profileLabels;
+
+  const shortLabels = getCategoryShortLabels();
+  return Object.fromEntries(getCategoryOrder().map((category) => [category, `${shortLabels[category]} 업무`]));
+}
+
 function getCategoryOrder() {
   return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.order || ["homeroom", "department", "subject"];
 }
@@ -1659,6 +1680,14 @@ function getCategoryLabel(category) {
 
 function getCategoryShortLabel(category) {
   return getCategoryShortLabels()[category] || CATEGORY_SHORT_LABELS[category] || "";
+}
+
+function getTaskCategoryLabel(category) {
+  return getTaskCategoryLabels()[category] || `${getCategoryShortLabel(category)} 업무`;
+}
+
+function isKnownCategory(category) {
+  return Boolean(getCategoryLabels()[category] || CATEGORY_LABELS[category]);
 }
 
 function getVisibleAgendaFocusDate() {
@@ -1705,7 +1734,7 @@ function getScopedStorageKey(baseKey) {
 function normalizeSchedule(schedule) {
   return {
     id: typeof schedule.id === "string" ? schedule.id : createId(),
-    category: CATEGORY_LABELS[schedule.category] ? schedule.category : "homeroom",
+    category: isKnownCategory(schedule.category) ? schedule.category : "homeroom",
     title: String(schedule.title || "").trim(),
     date: String(schedule.date || ""),
     startTime: String(schedule.startTime || ""),
@@ -1721,7 +1750,7 @@ function normalizeSchedule(schedule) {
 function normalizeTask(task) {
   return {
     id: typeof task.id === "string" ? task.id : createId(),
-    category: CATEGORY_LABELS[task.category] ? task.category : "homeroom",
+    category: isKnownCategory(task.category) ? task.category : "homeroom",
     title: String(task.title || "").trim(),
     startDate: String(task.startDate || task.start_date || ""),
     endDate: String(task.endDate || task.end_date || ""),

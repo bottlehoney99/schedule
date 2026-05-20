@@ -16,6 +16,8 @@
   --department-soft: #ffedd5;
   --subject: #7c3aed;
   --subject-soft: #ede9fe;
+  --training: #6d28d9;
+  --training-soft: #ede9fe;
   --shadow: 0 18px 45px rgba(31, 41, 55, 0.1);
   color-scheme: light;
 }
@@ -23,8 +25,10 @@
 body[data-person="person2"] {
   --homeroom: #ec4899;
   --homeroom-soft: #fce7f3;
-  --subject: #84cc16;
-  --subject-soft: #ecfccb;
+  --subject: #2563eb;
+  --subject-soft: #dbeafe;
+  --training: #7c3aed;
+  --training-soft: #ede9fe;
 }
 
 * {
@@ -963,6 +967,13 @@ textarea:focus {
   background: var(--subject);
 }
 
+.training,
+[data-category="training"] .event-marker,
+[data-category="training"] .mini-marker,
+[data-category="training"] .task-marker {
+  background: var(--training);
+}
+
 [data-category="homeroom"] .event-category {
   background: var(--homeroom-soft);
   color: var(--homeroom);
@@ -978,6 +989,11 @@ textarea:focus {
   color: var(--subject);
 }
 
+[data-category="training"] .event-category {
+  background: var(--training-soft);
+  color: var(--training);
+}
+
 .day-event.homeroom {
   background: var(--homeroom-soft);
 }
@@ -988,6 +1004,10 @@ textarea:focus {
 
 .day-event.subject {
   background: var(--subject-soft);
+}
+
+.day-event.training {
+  background: var(--training-soft);
 }
 
 .hidden {

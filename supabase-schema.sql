@@ -1,6 +1,6 @@
 create table if not exists public.schedules (
   id text primary key,
-  category text not null check (category in ('homeroom', 'department', 'subject')),
+  category text not null check (category in ('homeroom', 'department', 'subject', 'training')),
   title text not null,
   date date not null,
   start_time text not null default '',
@@ -15,6 +15,13 @@ create table if not exists public.schedules (
 
 alter table public.schedules
 add column if not exists reminder_minutes integer;
+
+alter table public.schedules
+drop constraint if exists schedules_category_check;
+
+alter table public.schedules
+add constraint schedules_category_check
+check (category in ('homeroom', 'department', 'subject', 'training'));
 
 do $$
 begin
@@ -67,7 +74,7 @@ create index if not exists schedules_completed_idx on public.schedules (complete
 
 create table if not exists public.work_tasks (
   id text primary key,
-  category text not null check (category in ('homeroom', 'department', 'subject')),
+  category text not null check (category in ('homeroom', 'department', 'subject', 'training')),
   title text not null,
   start_date date not null,
   end_date date not null,
@@ -77,6 +84,13 @@ create table if not exists public.work_tasks (
   updated_at timestamptz not null default now(),
   check (end_date >= start_date)
 );
+
+alter table public.work_tasks
+drop constraint if exists work_tasks_category_check;
+
+alter table public.work_tasks
+add constraint work_tasks_category_check
+check (category in ('homeroom', 'department', 'subject', 'training'));
 
 alter table public.work_tasks enable row level security;
 
