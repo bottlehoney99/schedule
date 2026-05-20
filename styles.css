@@ -81,6 +81,19 @@ svg {
   line-height: 1.15;
 }
 
+.topbar h1[contenteditable="true"],
+.eyebrow[contenteditable="true"] {
+  border-radius: 6px;
+  outline: 0;
+  transition: background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.topbar h1[contenteditable="true"]:focus,
+.eyebrow[contenteditable="true"]:focus {
+  background: rgba(15, 118, 110, 0.08);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
 .eyebrow {
   margin: 0;
   color: var(--primary);
@@ -101,6 +114,38 @@ svg {
 
 .topbar-actions {
   gap: 8px;
+}
+
+.person-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.person-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border-radius: 6px;
+  padding: 0 11px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.person-link:hover {
+  color: var(--primary);
+}
+
+.person-link.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 .layout {
@@ -337,6 +382,39 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.notification-methods {
+  display: grid;
+  gap: 12px;
+}
+
+.notification-method {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
+}
+
+.notification-method-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.notification-method strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.notification-method p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .status-pill {
@@ -940,6 +1018,19 @@ textarea:focus {
   .view-toggle,
   .category-tabs {
     width: 100%;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+  }
+
+  .person-switcher {
+    flex: 1 1 100%;
+  }
+
+  .person-link {
+    flex: 1;
+    justify-content: center;
   }
 
   .month-control {

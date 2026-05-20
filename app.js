@@ -1,20 +1,43 @@
-const STORAGE_KEY = "personal-school-schedule-v1";
+const PEOPLE = [
+  {
+    id: "person1",
+    page: "index.html",
+    label: "내 일정",
+    title: "내 학교 일정 관리",
+    eyebrow: "개인 학교 일정",
+  },
+  {
+    id: "person2",
+    page: "person2.html",
+    label: "다른 사람 일정",
+    title: "다른 사람 학교 일정 관리",
+    eyebrow: "공유 학교 일정",
+  },
+];
+const PRIMARY_PERSON_ID = "person1";
+const CURRENT_PERSON = getCurrentPerson();
+const STORAGE_KEY = getScopedStorageKey("personal-school-schedule-v1");
 const SUPABASE_CONFIG = window.SUPABASE_CONFIG || {};
 const SUPABASE_URL = String(SUPABASE_CONFIG.url || "").replace(/\/$/, "");
 const SUPABASE_ANON_KEY = String(SUPABASE_CONFIG.anonKey || "");
 const SUPABASE_TABLE = String(SUPABASE_CONFIG.table || "schedules");
 const SUPABASE_TASK_TABLE = String(SUPABASE_CONFIG.taskTable || "work_tasks");
-const TASK_STORAGE_KEY = "personal-school-work-tasks-v1";
-const NOTIFIED_STORAGE_KEY = "personal-school-schedule-notified-v1";
+const SUPABASE_PAGE_SETTINGS_TABLE = String(SUPABASE_CONFIG.pageSettingsTable || "page_settings");
+const TASK_STORAGE_KEY = getScopedStorageKey("personal-school-work-tasks-v1");
+const NOTIFIED_STORAGE_KEY = getScopedStorageKey("personal-school-schedule-notified-v1");
+const HEADER_STORAGE_KEY = getScopedStorageKey("personal-school-header-v1");
+const NOTIFICATION_SETTINGS_KEY = getScopedStorageKey("personal-school-notification-settings-v1");
 const DEFAULT_REMINDER_MINUTES = 10;
 const NOTIFICATION_CHECK_INTERVAL_MS = 30 * 1000;
 const DATE_ONLY_NOTIFICATION_TIME = "08:00";
 const TASK_ROW_MARKER = "__WORK_TASK__";
 const TASK_ID_PREFIX = "task:";
+const HEADER_ROW_MARKER = "__PAGE_HEADER__";
 
 let notificationTimer = null;
 let serviceWorkerRegistration = null;
 let taskStorageAdapter = null;
+let headerSaveTimer = null;
 
 const CATEGORY_LABELS = {
   homeroom: "담임 일정",
@@ -38,6 +61,9 @@ const state = {
   view: "calendar",
   taskFilter: "open",
   expandedCalendarDates: new Set(),
+  notificationSettings: {
+    browserEnabled: true,
+  },
 };
 
 const elements = {
@@ -87,18 +113,25 @@ const elements = {
   notificationButton: document.querySelector("#notificationButton"),
   testNotificationButton: document.querySelector("#testNotificationButton"),
   notificationStatus: document.querySelector("#notificationStatus"),
+  browserNotificationStatus: null,
+  browserNotificationButton: null,
+  testBrowserNotificationButton: null,
   template: document.querySelector("#eventTemplate"),
 };
 
 init();
 
 async function init() {
+  setupPersonShell();
+  setupNotificationShell();
   elements.dateInput.value = state.selectedDate;
   elements.taskStartDateInput.value = state.selectedDate;
   elements.taskEndDateInput.value = state.selectedDate;
   elements.reminderInput.value = String(DEFAULT_REMINDER_MINUTES);
   bindEvents();
   await registerServiceWorker();
+  await loadHeaderSettingsFromDatabase();
+  await loadNotificationSettings();
   const [schedules, tasks] = await Promise.all([loadSchedules(), loadTasks()]);
   state.schedules = schedules;
   state.tasks = tasks;
@@ -139,11 +172,251 @@ function bindEvents() {
     state.taskFilter = "all";
     renderTasks();
   });
-  elements.notificationButton.addEventListener("click", requestNotificationPermission);
-  elements.testNotificationButton.addEventListener("click", sendTestNotification);
+  elements.browserNotificationButton.addEventListener("click", toggleBrowserNotificationPermission);
+  elements.testBrowserNotificationButton.addEventListener("click", sendTestBrowserNotification);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkDueNotifications();
   });
+}
+
+function setupPersonShell() {
+  const savedHeader = loadHeaderConfig();
+  document.title = savedHeader.title;
+
+  const eyebrow = document.querySelector(".eyebrow");
+  if (eyebrow) {
+    eyebrow.textContent = savedHeader.eyebrow;
+    makeEditableHeaderText(eyebrow, "eyebrow");
+  }
+
+  const heading = document.querySelector(".topbar h1");
+  if (heading) {
+    heading.textContent = savedHeader.title;
+    makeEditableHeaderText(heading, "title");
+  }
+
+  const actions = document.querySelector(".topbar-actions");
+  if (!actions || actions.querySelector(".person-switcher")) return;
+
+  const switcher = document.createElement("nav");
+  switcher.className = "person-switcher";
+  switcher.setAttribute("aria-label", "일정 사용자 전환");
+
+  PEOPLE.forEach((person) => {
+    const link = document.createElement("a");
+    link.className = "person-link";
+    link.href = person.page;
+    link.textContent = person.label;
+
+    if (person.id === CURRENT_PERSON.id) {
+      link.classList.add("active");
+      link.setAttribute("aria-current", "page");
+    }
+
+    switcher.append(link);
+  });
+
+  actions.prepend(switcher);
+}
+
+function setupNotificationShell() {
+  const notificationBlock = document.querySelector(".notification-block");
+  if (!notificationBlock) return;
+
+  notificationBlock.innerHTML = `
+    <div class="section-heading">
+      <h2>알림</h2>
+    </div>
+    <div class="notification-methods">
+      <div class="notification-method">
+        <div class="notification-method-header">
+          <div>
+            <strong>윈도우 알림</strong>
+            <p>앱이 열려 있을 때 브라우저 알림으로 표시합니다.</p>
+          </div>
+          <span class="status-pill" id="browserNotificationStatus">확인 중</span>
+        </div>
+        <div class="notification-actions">
+          <button class="ghost-button" id="browserNotificationButton" type="button">윈도우 알림 허용</button>
+          <button class="ghost-button" id="testBrowserNotificationButton" type="button">테스트</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  elements.notificationStatus = document.querySelector("#browserNotificationStatus");
+  elements.notificationButton = document.querySelector("#browserNotificationButton");
+  elements.testNotificationButton = document.querySelector("#testBrowserNotificationButton");
+  elements.browserNotificationStatus = document.querySelector("#browserNotificationStatus");
+  elements.browserNotificationButton = document.querySelector("#browserNotificationButton");
+  elements.testBrowserNotificationButton = document.querySelector("#testBrowserNotificationButton");
+}
+
+function makeEditableHeaderText(element, field) {
+  element.contentEditable = "true";
+  element.spellcheck = false;
+  element.setAttribute("role", "textbox");
+  element.setAttribute("aria-label", field === "title" ? "큰 제목 수정" : "작은 제목 수정");
+  element.setAttribute("title", "클릭해서 직접 수정");
+
+  element.addEventListener("input", () => {
+    saveHeaderConfigFromPage();
+  });
+
+  element.addEventListener("blur", () => {
+    if (!element.textContent.trim()) {
+      element.textContent = field === "title" ? CURRENT_PERSON.title : CURRENT_PERSON.eyebrow;
+    }
+    saveHeaderConfigFromPage();
+  });
+
+  element.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      element.blur();
+    }
+  });
+}
+
+function loadHeaderConfig() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HEADER_STORAGE_KEY) || "{}");
+    return {
+      title: String(parsed.title || CURRENT_PERSON.title),
+      eyebrow: String(parsed.eyebrow || CURRENT_PERSON.eyebrow),
+    };
+  } catch (error) {
+    return {
+      title: CURRENT_PERSON.title,
+      eyebrow: CURRENT_PERSON.eyebrow,
+    };
+  }
+}
+
+function saveHeaderConfigFromPage() {
+  const heading = document.querySelector(".topbar h1");
+  const eyebrow = document.querySelector(".eyebrow");
+  const title = heading?.textContent.trim() || CURRENT_PERSON.title;
+  const eyebrowText = eyebrow?.textContent.trim() || CURRENT_PERSON.eyebrow;
+
+  document.title = title;
+  const config = {
+    title,
+    eyebrow: eyebrowText,
+  };
+
+  localStorage.setItem(HEADER_STORAGE_KEY, JSON.stringify(config));
+  queueHeaderSettingsSave(config);
+}
+
+async function loadHeaderSettingsFromDatabase() {
+  try {
+    const row = await readHeaderSettingsRow();
+    if (!row) return;
+
+    const config = {
+      title: String(row.header_title || row.headerTitle || CURRENT_PERSON.title),
+      eyebrow: String(row.header_eyebrow || row.headerEyebrow || CURRENT_PERSON.eyebrow),
+    };
+    applyHeaderConfig(config);
+    localStorage.setItem(HEADER_STORAGE_KEY, JSON.stringify(config));
+  } catch (error) {
+    console.warn("Header settings could not be loaded from Supabase.", error);
+  }
+}
+
+function applyHeaderConfig(config) {
+  const heading = document.querySelector(".topbar h1");
+  const eyebrow = document.querySelector(".eyebrow");
+  if (heading) heading.textContent = config.title;
+  if (eyebrow) eyebrow.textContent = config.eyebrow;
+  document.title = config.title;
+}
+
+function queueHeaderSettingsSave(config) {
+  if (headerSaveTimer) window.clearTimeout(headerSaveTimer);
+  headerSaveTimer = window.setTimeout(() => {
+    saveHeaderSettingsToDatabase(config).catch((error) => {
+      console.warn("Header settings could not be saved to Supabase.", error);
+    });
+  }, 500);
+}
+
+async function saveHeaderSettingsToDatabase(config) {
+  try {
+    await supabaseRequest(`${SUPABASE_PAGE_SETTINGS_TABLE}?on_conflict=person_id`, {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify([{
+        person_id: CURRENT_PERSON.id,
+        header_title: config.title,
+        header_eyebrow: config.eyebrow,
+        updated_at: new Date().toISOString(),
+      }]),
+    });
+  } catch (error) {
+    if (!isMissingPageSettingsTableError(error)) throw error;
+    await upsertHeaderSettingsScheduleRow(config);
+  }
+}
+
+async function readHeaderSettingsRow() {
+  try {
+    const rows = await supabaseRequest(
+      `${SUPABASE_PAGE_SETTINGS_TABLE}?person_id=eq.${encodeURIComponent(CURRENT_PERSON.id)}&select=*`,
+    );
+    return rows[0] || null;
+  } catch (error) {
+    if (!isMissingPageSettingsTableError(error)) throw error;
+    return readHeaderSettingsScheduleRow();
+  }
+}
+
+async function readHeaderSettingsScheduleRow() {
+  const rows = await supabaseRequest(
+    `${SUPABASE_TABLE}?id=eq.${encodeURIComponent(getHeaderSettingsRowId())}&select=*`,
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return parseHeaderSettingsPayload(row.memo);
+}
+
+async function upsertHeaderSettingsScheduleRow(config) {
+  await supabaseRequest(`${SUPABASE_TABLE}?on_conflict=id`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([{
+      id: getHeaderSettingsRowId(),
+      category: "homeroom",
+      title: config.title,
+      date: "1970-01-01",
+      start_time: "",
+      end_time: "",
+      place: HEADER_ROW_MARKER,
+      memo: JSON.stringify({
+        marker: HEADER_ROW_MARKER,
+        headerTitle: config.title,
+        headerEyebrow: config.eyebrow,
+      }),
+      reminder_minutes: null,
+      completed: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }]),
+  });
+}
+
+function parseHeaderSettingsPayload(value) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed?.marker === HEADER_ROW_MARKER ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getHeaderSettingsRowId() {
+  return `${getCurrentPersonPrefix()}header-settings`;
 }
 
 async function handleSubmit(event) {
@@ -522,7 +795,10 @@ async function toggleComplete(id) {
 }
 
 async function clearCompleted() {
-  const completedCount = state.schedules.filter((schedule) => schedule.completed).length;
+  const completedScheduleIds = state.schedules
+    .filter((schedule) => schedule.completed)
+    .map((schedule) => schedule.id);
+  const completedCount = completedScheduleIds.length;
   if (!completedCount) {
     showToast("정리할 완료 일정이 없습니다.");
     return;
@@ -533,7 +809,7 @@ async function clearCompleted() {
 
   state.schedules = state.schedules.filter((schedule) => !schedule.completed);
   try {
-    await deleteCompletedSchedulesFromDatabase();
+    await deleteCompletedSchedulesFromDatabase(completedScheduleIds);
     localStorage.removeItem(STORAGE_KEY);
     showToast("완료 일정을 정리했습니다.");
   } catch (error) {
@@ -903,7 +1179,9 @@ function loadLegacyTasks() {
 
 async function readAllSchedulesFromDatabase() {
   const rows = await supabaseRequest(`${SUPABASE_TABLE}?select=*&order=date.asc,start_time.asc,title.asc`);
-  return rows.filter((row) => !isTaskScheduleRow(row)).map(scheduleFromDatabase);
+  return rows
+    .filter((row) => !isSystemScheduleRow(row) && isOwnedRowForCurrentPerson(row))
+    .map(scheduleFromDatabase);
 }
 
 async function upsertScheduleInDatabase(schedule) {
@@ -912,7 +1190,7 @@ async function upsertScheduleInDatabase(schedule) {
 }
 
 async function updateScheduleInDatabase(schedule) {
-  const rows = await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(schedule.id)}`, {
+  const rows = await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(getDatabaseOwnedId(schedule.id))}`, {
     method: "PATCH",
     headers: { Prefer: "return=representation" },
     body: JSON.stringify(scheduleToDatabase(schedule)),
@@ -935,21 +1213,14 @@ async function upsertSchedulesInDatabase(schedules) {
 }
 
 async function deleteScheduleFromDatabase(id) {
-  await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+  await supabaseRequest(`${SUPABASE_TABLE}?id=eq.${encodeURIComponent(getDatabaseOwnedId(id))}`, {
     method: "DELETE",
     headers: { Prefer: "return=minimal" },
   });
 }
 
-async function deleteCompletedSchedulesFromDatabase() {
-  const taskRowFilter = taskStorageAdapter === "scheduleRows"
-    ? `&place=neq.${encodeURIComponent(TASK_ROW_MARKER)}`
-    : "";
-
-  await supabaseRequest(`${SUPABASE_TABLE}?completed=eq.true${taskRowFilter}`, {
-    method: "DELETE",
-    headers: { Prefer: "return=minimal" },
-  });
+async function deleteCompletedSchedulesFromDatabase(ids) {
+  await Promise.all(ids.map((id) => deleteScheduleFromDatabase(id)));
 }
 
 async function readAllTasksFromDatabase() {
@@ -958,7 +1229,7 @@ async function readAllTasksFromDatabase() {
   try {
     const rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?select=*&order=end_date.asc,start_date.asc,title.asc`);
     taskStorageAdapter = "workTasks";
-    return rows.map(taskFromDatabase);
+    return rows.filter(isOwnedRowForCurrentPerson).map(taskFromDatabase);
   } catch (error) {
     if (!isMissingTaskTableError(error)) throw error;
     taskStorageAdapter = "scheduleRows";
@@ -976,7 +1247,7 @@ async function updateTaskInDatabase(task) {
 
   let rows;
   try {
-    rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(task.id)}`, {
+    rows = await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(getDatabaseOwnedId(task.id))}`, {
       method: "PATCH",
       headers: { Prefer: "return=representation" },
       body: JSON.stringify(taskToDatabase(task)),
@@ -1018,7 +1289,7 @@ async function deleteTaskFromDatabase(id) {
   }
 
   try {
-    await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+    await supabaseRequest(`${SUPABASE_TASK_TABLE}?id=eq.${encodeURIComponent(getDatabaseOwnedId(id))}`, {
       method: "DELETE",
       headers: { Prefer: "return=minimal" },
     });
@@ -1033,7 +1304,7 @@ async function readAllTasksFromScheduleRows() {
   const rows = await supabaseRequest(
     `${SUPABASE_TABLE}?select=*&place=eq.${encodeURIComponent(TASK_ROW_MARKER)}&order=date.asc,title.asc`,
   );
-  return rows.map(taskFromScheduleRow);
+  return rows.filter(isOwnedTaskScheduleRowForCurrentPerson).map(taskFromScheduleRow);
 }
 
 async function upsertTasksAsScheduleRows(tasks) {
@@ -1104,7 +1375,7 @@ function isSupabaseConfigured() {
 
 function scheduleFromDatabase(row) {
   return normalizeSchedule({
-    id: row.id,
+    id: getAppOwnedId(row.id),
     category: row.category,
     title: row.title,
     date: row.date,
@@ -1122,7 +1393,7 @@ function scheduleToDatabase(schedule) {
   const normalized = normalizeSchedule(schedule);
 
   return {
-    id: normalized.id,
+    id: getDatabaseOwnedId(normalized.id),
     category: normalized.category,
     title: normalized.title,
     date: normalized.date,
@@ -1139,7 +1410,7 @@ function scheduleToDatabase(schedule) {
 
 function taskFromDatabase(row) {
   return normalizeTask({
-    id: row.id,
+    id: getAppOwnedId(row.id),
     category: row.category,
     title: row.title,
     startDate: row.start_date,
@@ -1154,7 +1425,7 @@ function taskToDatabase(task) {
   const normalized = normalizeTask(task);
 
   return {
-    id: normalized.id,
+    id: getDatabaseOwnedId(normalized.id),
     category: normalized.category,
     title: normalized.title,
     start_date: normalized.startDate,
@@ -1215,22 +1486,97 @@ function parseTaskRowPayload(value) {
 }
 
 function isTaskScheduleRow(row) {
-  return row.place === TASK_ROW_MARKER || String(row.id || "").startsWith(TASK_ID_PREFIX);
+  return row.place === TASK_ROW_MARKER || isTaskRowId(row.id);
+}
+
+function isSystemScheduleRow(row) {
+  return isTaskScheduleRow(row) || row.place === HEADER_ROW_MARKER || String(row.id || "").endsWith("header-settings");
+}
+
+function isOwnedRowForCurrentPerson(row) {
+  const id = String(row.id || "");
+  if (isPrimaryPerson()) return !getSecondaryPersonPrefixes().some((prefix) => id.startsWith(prefix));
+  return id.startsWith(getCurrentPersonPrefix());
+}
+
+function isOwnedTaskScheduleRowForCurrentPerson(row) {
+  const id = String(row.id || "");
+  if (isPrimaryPerson()) {
+    return !getSecondaryPersonPrefixes().some((prefix) => id.startsWith(`${prefix}${TASK_ID_PREFIX}`));
+  }
+  return id.startsWith(`${getCurrentPersonPrefix()}${TASK_ID_PREFIX}`);
+}
+
+function getDatabaseOwnedId(id) {
+  const value = String(id || createId());
+  const prefix = getCurrentPersonPrefix();
+  if (!prefix || value.startsWith(prefix)) return value;
+  return `${prefix}${value}`;
+}
+
+function getAppOwnedId(id) {
+  let value = String(id || createId());
+  const prefix = PEOPLE
+    .map((person) => getPersonPrefix(person.id))
+    .find((candidate) => candidate && value.startsWith(candidate));
+
+  if (prefix) value = value.slice(prefix.length);
+  return value;
 }
 
 function getDatabaseTaskId(id) {
-  const value = String(id || createId());
-  return value.startsWith(TASK_ID_PREFIX) ? value : `${TASK_ID_PREFIX}${value}`;
+  const value = getAppTaskId(id);
+  return `${getCurrentPersonPrefix()}${TASK_ID_PREFIX}${value}`;
 }
 
 function getAppTaskId(id) {
-  const value = String(id || createId());
+  const value = getAppOwnedId(id);
   return value.startsWith(TASK_ID_PREFIX) ? value.slice(TASK_ID_PREFIX.length) : value;
+}
+
+function isTaskRowId(id) {
+  const value = String(id || "");
+  return value.startsWith(TASK_ID_PREFIX) || PEOPLE.some((person) => {
+    const prefix = getPersonPrefix(person.id);
+    return Boolean(prefix) && value.startsWith(`${prefix}${TASK_ID_PREFIX}`);
+  });
 }
 
 function isMissingTaskTableError(error) {
   const message = String(error?.message || error || "");
   return message.includes("PGRST205") || message.includes(`'public.${SUPABASE_TASK_TABLE}'`);
+}
+
+function isMissingPageSettingsTableError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("PGRST205") || message.includes(`'public.${SUPABASE_PAGE_SETTINGS_TABLE}'`);
+}
+
+function getCurrentPerson() {
+  const fileName = decodeURIComponent(window.location.pathname.split("/").pop() || "index.html").toLowerCase();
+  return PEOPLE.find((person) => person.page.toLowerCase() === fileName) || PEOPLE[0];
+}
+
+function isPrimaryPerson() {
+  return CURRENT_PERSON.id === PRIMARY_PERSON_ID;
+}
+
+function getPersonPrefix(personId) {
+  return personId === PRIMARY_PERSON_ID ? "" : `${personId}:`;
+}
+
+function getCurrentPersonPrefix() {
+  return getPersonPrefix(CURRENT_PERSON.id);
+}
+
+function getSecondaryPersonPrefixes() {
+  return PEOPLE
+    .filter((person) => person.id !== PRIMARY_PERSON_ID)
+    .map((person) => getPersonPrefix(person.id));
+}
+
+function getScopedStorageKey(baseKey) {
+  return CURRENT_PERSON?.id === PRIMARY_PERSON_ID ? baseKey : `${baseKey}-${CURRENT_PERSON.id}`;
 }
 
 function normalizeSchedule(schedule) {
@@ -1284,73 +1630,123 @@ async function registerServiceWorker() {
   }
 }
 
-async function requestNotificationPermission() {
+async function loadNotificationSettings() {
+  const localSettings = loadLocalNotificationSettings();
+  state.notificationSettings = { ...state.notificationSettings, ...localSettings };
+  renderNotificationStatus();
+}
+
+function loadLocalNotificationSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(NOTIFICATION_SETTINGS_KEY) || "{}");
+    return {
+      browserEnabled: parsed.browserEnabled !== false,
+    };
+  } catch (error) {
+    return {
+      browserEnabled: true,
+    };
+  }
+}
+
+function writeLocalNotificationSettings() {
+  localStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(state.notificationSettings));
+}
+
+async function saveNotificationSettings() {
+  writeLocalNotificationSettings();
+  renderNotificationStatus();
+}
+
+async function toggleBrowserNotificationPermission() {
+  if (state.notificationSettings.browserEnabled && Notification.permission === "granted") {
+    state.notificationSettings.browserEnabled = false;
+    await saveNotificationSettings();
+    showToast("윈도우 알림을 껐습니다.");
+    return;
+  }
+
+  const allowed = await ensureBrowserNotificationsEnabled();
+  if (allowed) {
+    showToast("윈도우 알림을 켰습니다.");
+    checkDueNotifications();
+  }
+}
+
+async function ensureBrowserNotificationsEnabled() {
   if (!("Notification" in window)) {
     showToast("이 브라우저는 알림을 지원하지 않습니다.");
     renderNotificationStatus();
-    return;
+    return false;
   }
 
   if (!window.isSecureContext) {
     showToast("알림은 localhost 또는 HTTPS 주소에서만 안정적으로 동작합니다.");
   }
 
-  const permission = await Notification.requestPermission();
-  renderNotificationStatus();
+  if (Notification.permission !== "granted") {
+    await Notification.requestPermission();
+  }
 
-  if (permission === "granted") {
-    showToast("알림을 허용했습니다.");
-    checkDueNotifications();
-  } else if (permission === "denied") {
+  if (Notification.permission === "granted") {
+    state.notificationSettings.browserEnabled = true;
+    await saveNotificationSettings();
+    return true;
+  }
+
+  if (Notification.permission === "denied") {
     showToast("브라우저 설정에서 알림 차단을 해제해야 합니다.");
   } else {
     showToast("알림 권한이 아직 허용되지 않았습니다.");
   }
+
+  renderNotificationStatus();
+  return false;
 }
 
-async function sendTestNotification() {
-  if (!("Notification" in window)) {
-    showToast("이 브라우저는 알림을 지원하지 않습니다.");
-    return;
-  }
-
-  if (Notification.permission !== "granted") {
-    await requestNotificationPermission();
-  }
-
-  if (Notification.permission !== "granted") return;
+async function sendTestBrowserNotification() {
+  const allowed = await ensureBrowserNotificationsEnabled();
+  if (!allowed) return;
 
   await showNotification("학교 일정 테스트 알림", {
-    body: "Windows와 휴대폰 브라우저에서 이런 형태로 일정 알림이 표시됩니다.",
+    body: "Windows 브라우저 알림 테스트입니다.",
     tag: `school-schedule-test-${Date.now()}`,
   });
-  showToast("테스트 알림을 보냈습니다.");
+  showToast("윈도우 테스트 알림을 보냈습니다.");
 }
 
 function renderNotificationStatus() {
-  if (!elements.notificationStatus) return;
+  renderBrowserNotificationStatus();
+}
 
-  elements.notificationStatus.classList.remove("is-ready", "is-blocked");
+function renderBrowserNotificationStatus() {
+  if (!elements.browserNotificationStatus || !elements.browserNotificationButton) return;
+
+  elements.browserNotificationStatus.classList.remove("is-ready", "is-blocked");
 
   if (!("Notification" in window)) {
-    elements.notificationStatus.textContent = "미지원";
-    elements.notificationStatus.classList.add("is-blocked");
-    return;
-  }
-
-  if (Notification.permission === "granted") {
-    elements.notificationStatus.textContent = "켜짐";
-    elements.notificationStatus.classList.add("is-ready");
+    elements.browserNotificationStatus.textContent = "미지원";
+    elements.browserNotificationStatus.classList.add("is-blocked");
+    elements.browserNotificationButton.textContent = "사용 불가";
     return;
   }
 
   if (Notification.permission === "denied") {
-    elements.notificationStatus.textContent = "차단됨";
-    elements.notificationStatus.classList.add("is-blocked");
+    elements.browserNotificationStatus.textContent = "차단됨";
+    elements.browserNotificationStatus.classList.add("is-blocked");
+    elements.browserNotificationButton.textContent = "윈도우 알림 허용";
     return;
   }
 
-  elements.notificationStatus.textContent = "대기";
+  if (state.notificationSettings.browserEnabled && Notification.permission === "granted") {
+    elements.browserNotificationStatus.textContent = "켜짐";
+    elements.browserNotificationStatus.classList.add("is-ready");
+    elements.browserNotificationButton.textContent = "윈도우 알림 끄기";
+    return;
+  }
+
+  elements.browserNotificationStatus.textContent = Notification.permission === "granted" ? "꺼짐" : "대기";
+  elements.browserNotificationButton.textContent = "윈도우 알림 허용";
 }
 
 function startNotificationScheduler() {
@@ -1360,7 +1756,13 @@ function startNotificationScheduler() {
 }
 
 async function checkDueNotifications() {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const browserReady = (
+    state.notificationSettings.browserEnabled &&
+    "Notification" in window &&
+    Notification.permission === "granted"
+  );
+
+  if (!browserReady) return;
 
   const now = new Date();
   const sentKeys = readNotifiedKeys();
@@ -1373,16 +1775,19 @@ async function checkDueNotifications() {
     if (!timing) continue;
 
     const key = getNotificationKey(schedule);
-    if (sentKeys.has(key)) continue;
 
     const reminderTime = timing.reminderTime.getTime();
     const eventTime = timing.eventTime.getTime();
     const nowTime = now.getTime();
 
     if (reminderTime <= nowTime && eventTime + 60 * 1000 >= nowTime) {
-      sentKeys.add(key);
-      changed = true;
-      await showScheduleNotification(schedule);
+      const browserKey = `${key}|browser`;
+
+      if (browserReady && !sentKeys.has(browserKey)) {
+        await showScheduleNotification(schedule);
+        sentKeys.add(browserKey);
+        changed = true;
+      }
     }
   }
 

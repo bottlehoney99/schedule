@@ -113,3 +113,35 @@ using (true);
 create index if not exists work_tasks_period_idx on public.work_tasks (start_date, end_date);
 create index if not exists work_tasks_category_idx on public.work_tasks (category);
 create index if not exists work_tasks_completed_idx on public.work_tasks (completed);
+
+create table if not exists public.page_settings (
+  person_id text primary key,
+  header_title text not null default '',
+  header_eyebrow text not null default '',
+  updated_at timestamptz not null default now()
+);
+
+alter table public.page_settings enable row level security;
+
+drop policy if exists "Public read page settings" on public.page_settings;
+drop policy if exists "Public insert page settings" on public.page_settings;
+drop policy if exists "Public update page settings" on public.page_settings;
+
+create policy "Public read page settings"
+on public.page_settings
+for select
+to anon
+using (true);
+
+create policy "Public insert page settings"
+on public.page_settings
+for insert
+to anon
+with check (true);
+
+create policy "Public update page settings"
+on public.page_settings
+for update
+to anon
+using (true)
+with check (true);
