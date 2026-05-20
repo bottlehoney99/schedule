@@ -20,6 +20,13 @@
   color-scheme: light;
 }
 
+body[data-person="person2"] {
+  --homeroom: #ec4899;
+  --homeroom-soft: #fce7f3;
+  --subject: #84cc16;
+  --subject-soft: #ecfccb;
+}
+
 * {
   box-sizing: border-box;
 }

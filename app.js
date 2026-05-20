@@ -51,6 +51,22 @@ const CATEGORY_SHORT_LABELS = {
   subject: "교과",
 };
 
+const PERSON_CATEGORY_PROFILES = {
+  person2: {
+    labels: {
+      homeroom: "여가 일정",
+      subject: "상담 일정",
+      department: "부서 일정",
+    },
+    shortLabels: {
+      homeroom: "여가",
+      subject: "상담",
+      department: "부서",
+    },
+    order: ["homeroom", "subject", "department"],
+  },
+};
+
 const state = {
   schedules: [],
   tasks: [],
@@ -180,6 +196,9 @@ function bindEvents() {
 }
 
 function setupPersonShell() {
+  document.body.dataset.person = CURRENT_PERSON.id;
+  setupCategoryShell();
+
   const savedHeader = loadHeaderConfig();
   document.title = savedHeader.title;
 
@@ -217,6 +236,67 @@ function setupPersonShell() {
   });
 
   actions.prepend(switcher);
+}
+
+function setupCategoryShell() {
+  const labels = getCategoryLabels();
+  const shortLabels = getCategoryShortLabels();
+  const order = getCategoryOrder();
+
+  updateCategorySelect(elements.categoryInput, labels, order);
+  updateCategorySelect(
+    elements.taskCategoryInput,
+    Object.fromEntries(order.map((category) => [category, `${shortLabels[category]} 업무`])),
+    order,
+  );
+  updateCategoryTabs(shortLabels, order);
+  updateLegend(labels, order);
+}
+
+function updateCategorySelect(select, labels, order) {
+  if (!select) return;
+
+  const optionsByValue = new Map(Array.from(select.options).map((option) => [option.value, option]));
+  order.forEach((category) => {
+    const option = optionsByValue.get(category);
+    if (!option) return;
+
+    option.textContent = labels[category];
+    select.append(option);
+  });
+}
+
+function updateCategoryTabs(shortLabels, order) {
+  const tabs = Array.from(document.querySelectorAll(".category-tab"));
+  const parent = tabs[0]?.parentElement;
+  if (!parent) return;
+
+  const allTab = tabs.find((tab) => tab.dataset.filter === "all");
+  if (allTab) {
+    allTab.textContent = "전체";
+    parent.append(allTab);
+  }
+
+  order.forEach((category) => {
+    const tab = tabs.find((item) => item.dataset.filter === category);
+    if (!tab) return;
+
+    tab.textContent = shortLabels[category];
+    parent.append(tab);
+  });
+}
+
+function updateLegend(labels, order) {
+  const legend = document.querySelector(".legend");
+  if (!legend) return;
+
+  legend.replaceChildren(
+    ...order.map((category) => {
+      const item = document.createElement("span");
+      item.innerHTML = `<i class="dot ${category}"></i>${labels[category]}`;
+      return item;
+    }),
+  );
 }
 
 function setupNotificationShell() {
@@ -502,8 +582,10 @@ function goToday() {
   const today = new Date();
   state.visibleDate = startOfMonth(today);
   state.selectedDate = toDateInputValue(today);
+  state.view = "list";
   elements.dateInput.value = state.selectedDate;
   render();
+  scrollAgendaIntoView();
 }
 
 function setView(view) {
@@ -585,7 +667,7 @@ function renderUpcoming() {
         <span class="mini-marker"></span>
         <span>
           <strong>${escapeHtml(schedule.title)}</strong>
-          <span>${formatDate(schedule.date)} · ${CATEGORY_SHORT_LABELS[schedule.category]}${schedule.startTime ? ` · ${schedule.startTime}` : ""}</span>
+          <span>${formatDate(schedule.date)} · ${getCategoryShortLabel(schedule.category)}${schedule.startTime ? ` · ${schedule.startTime}` : ""}</span>
         </span>
       `;
       item.addEventListener("click", () => {
@@ -640,7 +722,7 @@ function renderCalendar() {
           <span class="dot ${schedule.category}"></span>
           <span>
             <strong>${escapeHtml(schedule.title)}</strong>
-            <span>${schedule.startTime || CATEGORY_SHORT_LABELS[schedule.category]}</span>
+            <span>${schedule.startTime || getCategoryShortLabel(schedule.category)}</span>
           </span>
         `;
         eventButton.addEventListener("click", () => editSchedule(schedule.id));
@@ -675,12 +757,13 @@ function renderCalendar() {
 function renderAgenda() {
   const month = state.visibleDate.getMonth();
   const year = state.visibleDate.getFullYear();
+  const focusDate = getVisibleAgendaFocusDate();
   const schedules = getFilteredSchedules()
     .filter((schedule) => {
       const date = parseDate(schedule.date);
       return date.getFullYear() === year && date.getMonth() === month;
     })
-    .sort(sortSchedules);
+    .sort((a, b) => sortAgendaSchedules(a, b, focusDate));
 
   if (!schedules.length) {
     elements.agendaList.innerHTML = `<div class="empty-state">이 달에 표시할 일정이 없습니다.</div>`;
@@ -704,11 +787,17 @@ function renderAgenda() {
   elements.agendaList.replaceChildren(...fragments);
 }
 
+function scrollAgendaIntoView() {
+  requestAnimationFrame(() => {
+    elements.listView.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 function createEventItem(schedule) {
   const node = elements.template.content.firstElementChild.cloneNode(true);
   node.dataset.category = schedule.category;
   node.classList.toggle("is-completed", schedule.completed);
-  node.querySelector(".event-category").textContent = CATEGORY_LABELS[schedule.category];
+  node.querySelector(".event-category").textContent = getCategoryLabel(schedule.category);
   node.querySelector(".event-time").textContent = formatTimeRange(schedule);
   node.querySelector("h3").textContent = schedule.title;
 
@@ -907,7 +996,7 @@ function createTaskItem(task) {
   const node = document.querySelector("#taskTemplate").content.firstElementChild.cloneNode(true);
   node.dataset.category = task.category;
   node.classList.toggle("is-completed", task.completed);
-  node.querySelector(".task-category").textContent = `${CATEGORY_SHORT_LABELS[task.category]} 업무`;
+  node.querySelector(".task-category").textContent = `${getCategoryShortLabel(task.category)} 업무`;
   node.querySelector(".task-status").textContent = getTaskStatusText(task);
   node.querySelector("h3").textContent = task.title;
   node.querySelector(".task-period").textContent = `${formatDate(task.startDate)} - ${formatDate(task.endDate)}`;
@@ -988,7 +1077,7 @@ async function toggleTaskComplete(id) {
 function getFilteredSchedules() {
   return state.schedules.filter((schedule) => {
     const matchesCategory = state.filter === "all" || schedule.category === state.filter;
-    const haystack = [schedule.title, schedule.place, schedule.memo, CATEGORY_LABELS[schedule.category]]
+    const haystack = [schedule.title, schedule.place, schedule.memo, getCategoryLabel(schedule.category)]
       .join(" ")
       .toLowerCase();
     const matchesQuery = !state.query || haystack.includes(state.query);
@@ -1003,7 +1092,7 @@ function getFilteredTasks() {
   return state.tasks
     .filter((task) => {
       const matchesCategory = state.filter === "all" || task.category === state.filter;
-      const haystack = [task.title, task.memo, CATEGORY_LABELS[task.category]].join(" ").toLowerCase();
+      const haystack = [task.title, task.memo, getCategoryLabel(task.category)].join(" ").toLowerCase();
       const matchesQuery = !state.query || haystack.includes(state.query);
       const overlapsMonth = parseDate(task.startDate) <= monthEnd && parseDate(task.endDate) >= monthStart;
       const matchesTaskFilter = state.taskFilter === "all" || !task.completed;
@@ -1552,6 +1641,40 @@ function isMissingPageSettingsTableError(error) {
   return message.includes("PGRST205") || message.includes(`'public.${SUPABASE_PAGE_SETTINGS_TABLE}'`);
 }
 
+function getCategoryLabels() {
+  return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.labels || CATEGORY_LABELS;
+}
+
+function getCategoryShortLabels() {
+  return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.shortLabels || CATEGORY_SHORT_LABELS;
+}
+
+function getCategoryOrder() {
+  return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.order || ["homeroom", "department", "subject"];
+}
+
+function getCategoryLabel(category) {
+  return getCategoryLabels()[category] || CATEGORY_LABELS[category] || "";
+}
+
+function getCategoryShortLabel(category) {
+  return getCategoryShortLabels()[category] || CATEGORY_SHORT_LABELS[category] || "";
+}
+
+function getVisibleAgendaFocusDate() {
+  if (!state.selectedDate) return "";
+
+  const selectedDate = parseDate(state.selectedDate);
+  if (
+    selectedDate.getFullYear() !== state.visibleDate.getFullYear() ||
+    selectedDate.getMonth() !== state.visibleDate.getMonth()
+  ) {
+    return "";
+  }
+
+  return state.selectedDate;
+}
+
 function getCurrentPerson() {
   const fileName = decodeURIComponent(window.location.pathname.split("/").pop() || "index.html").toLowerCase();
   return PEOPLE.find((person) => person.page.toLowerCase() === fileName) || PEOPLE[0];
@@ -1800,7 +1923,7 @@ async function showScheduleNotification(schedule) {
   const reminderText = formatReminder(schedule.reminderMinutes);
 
   await showNotification(`일정 알림: ${schedule.title}`, {
-    body: `${formatDate(schedule.date)} ${timeText}${placeText}\n${CATEGORY_LABELS[schedule.category]} · ${reminderText}`,
+    body: `${formatDate(schedule.date)} ${timeText}${placeText}\n${getCategoryLabel(schedule.category)} · ${reminderText}`,
     tag: getNotificationKey(schedule),
     data: { scheduleId: schedule.id, url: `${window.location.origin}${window.location.pathname}?schedule=${encodeURIComponent(schedule.id)}` },
   });
@@ -1874,6 +1997,21 @@ function sortSchedules(a, b) {
     (a.startTime || "99:99").localeCompare(b.startTime || "99:99") ||
     a.title.localeCompare(b.title, "ko")
   );
+}
+
+function sortAgendaSchedules(a, b, focusDate) {
+  if (!focusDate) return sortSchedules(a, b);
+
+  const bucketA = getAgendaDateBucket(a.date, focusDate);
+  const bucketB = getAgendaDateBucket(b.date, focusDate);
+  if (bucketA !== bucketB) return bucketA - bucketB;
+
+  return sortSchedules(a, b);
+}
+
+function getAgendaDateBucket(dateValue, focusDate) {
+  if (dateValue === focusDate) return 0;
+  return dateValue > focusDate ? 1 : 2;
 }
 
 function sortTasks(a, b) {
