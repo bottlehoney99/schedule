@@ -2,14 +2,14 @@ const PEOPLE = [
   {
     id: "person1",
     page: "index.html",
-    label: "내 일정",
+    label: "A",
     title: "내 학교 일정 관리",
     eyebrow: "개인 학교 일정",
   },
   {
     id: "person2",
     page: "person2.html",
-    label: "다른 사람 일정",
+    label: "B",
     title: "다른 사람 학교 일정 관리",
     eyebrow: "공유 학교 일정",
   },
