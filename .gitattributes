@@ -1,0 +1,9 @@
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.sql text eol=lf
+*.svg text eol=lf
+*.webmanifest text eol=lf
+*.ps1 text eol=lf
+.gitattributes text eol=lf

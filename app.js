@@ -72,6 +72,7 @@ const PERSON_CATEGORY_PROFILES = {
       training: "연수 업무",
     },
     order: ["homeroom", "subject", "department", "training"],
+    selectOrder: ["subject", "department", "training", "homeroom"],
   },
 };
 
@@ -251,7 +252,7 @@ function setupCategoryShell() {
   const shortLabels = getCategoryShortLabels();
   const order = getCategoryOrder();
 
-  updateCategorySelect(elements.categoryInput, labels, order);
+  updateCategorySelect(elements.categoryInput, labels, getCategorySelectOrder());
   updateCategorySelect(elements.taskCategoryInput, getTaskCategoryLabels(), order);
   updateCategoryTabs(shortLabels, order);
   updateLegend(labels, order);
@@ -1672,6 +1673,10 @@ function getTaskCategoryLabels() {
 
 function getCategoryOrder() {
   return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.order || ["homeroom", "department", "subject"];
+}
+
+function getCategorySelectOrder() {
+  return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.selectOrder || getCategoryOrder();
 }
 
 function getCategoryLabel(category) {
