@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111827" />
+    <title>학교 일정 관리 V2</title>
+    <link rel="stylesheet" href="v2.css" />
+  </head>
+  <body>
+    <div class="v2-shell">
+      <header class="v2-header">
+        <div>
+          <p class="v2-eyebrow">Interactive Planner</p>
+          <h1>학교 일정 관리 V2</h1>
+        </div>
+        <nav class="profile-switcher" aria-label="일정 페이지 전환">
+          <button class="profile-button active" type="button" data-person="person1">A</button>
+          <button class="profile-button" type="button" data-person="person2">B</button>
+          <button class="profile-button" type="button" data-person="person3">C</button>
+        </nav>
+      </header>
+
+      <main class="v2-layout">
+        <section class="command-panel" aria-label="일정 입력">
+          <div class="profile-card">
+            <span class="profile-kicker" id="profileKicker">개인 학교 일정</span>
+            <strong id="profileTitle">A 일정</strong>
+            <p id="profileCopy">월간 일정과 기간 업무를 한 화면에서 조정합니다.</p>
+          </div>
+
+          <div class="mode-tabs" role="tablist" aria-label="입력 모드">
+            <button class="mode-tab active" type="button" data-mode="schedule">일정</button>
+            <button class="mode-tab" type="button" data-mode="task">기간 업무</button>
+          </div>
+
+          <form class="entry-form" id="scheduleForm">
+            <input id="scheduleId" type="hidden" />
+            <label>
+              <span>분류</span>
+              <select id="scheduleCategory"></select>
+            </label>
+            <label>
+              <span>일정명</span>
+              <input id="scheduleTitle" type="text" maxlength="60" placeholder="일정명을 입력" required />
+            </label>
+            <div class="form-grid">
+              <label>
+                <span>날짜</span>
+                <input id="scheduleDate" type="date" required />
+              </label>
+              <label>
+                <span>시간</span>
+                <input id="scheduleTime" type="time" />
+              </label>
+            </div>
+            <label>
+              <span>장소</span>
+              <input id="schedulePlace" type="text" maxlength="40" placeholder="선택 입력" />
+            </label>
+            <label>
+              <span>메모</span>
+              <textarea id="scheduleMemo" rows="3" maxlength="200" placeholder="필요한 내용을 짧게 기록"></textarea>
+            </label>
+            <button class="primary-action" type="submit">
+              <span id="scheduleSubmitText">일정 추가</span>
+            </button>
+          </form>
+
+          <form class="entry-form hidden" id="taskForm">
+            <input id="taskId" type="hidden" />
+            <label>
+              <span>분류</span>
+              <select id="taskCategory"></select>
+            </label>
+            <label>
+              <span>업무명</span>
+              <input id="taskTitle" type="text" maxlength="80" placeholder="기간 업무명 입력" required />
+            </label>
+            <div class="form-grid">
+              <label>
+                <span>시작일</span>
+                <input id="taskStart" type="date" required />
+              </label>
+              <label>
+                <span>마감일</span>
+                <input id="taskEnd" type="date" required />
+              </label>
+            </div>
+            <label>
+              <span>메모</span>
+              <textarea id="taskMemo" rows="3" maxlength="200" placeholder="업무 기준이나 진행 상황"></textarea>
+            </label>
+            <button class="primary-action" type="submit">
+              <span id="taskSubmitText">업무 추가</span>
+            </button>
+          </form>
+
+          <div class="sync-card">
+            <strong>저장 상태</strong>
+            <span id="syncStatus">연결 확인 중</span>
+          </div>
+        </section>
+
+        <section class="planner-stage" aria-label="일정 보기">
+          <div class="stage-toolbar">
+            <div class="month-actions">
+              <button class="icon-command" id="prevMonth" type="button" aria-label="이전 달">
+                <span aria-hidden="true">‹</span>
+              </button>
+              <button class="today-command" id="todayButton" type="button">오늘</button>
+              <button class="icon-command" id="nextMonth" type="button" aria-label="다음 달">
+                <span aria-hidden="true">›</span>
+              </button>
+              <h2 id="monthLabel"></h2>
+            </div>
+            <div class="view-pills" id="categoryFilters" aria-label="분류 필터"></div>
+          </div>
+
+          <div class="pulse-strip" id="pulseStrip" aria-label="이번 달 흐름"></div>
+
+          <div class="calendar-card">
+            <div class="weekday-row">
+              <span>일</span>
+              <span>월</span>
+              <span>화</span>
+              <span>수</span>
+              <span>목</span>
+              <span>금</span>
+              <span>토</span>
+            </div>
+            <div class="calendar-grid" id="calendarGrid"></div>
+          </div>
+        </section>
+
+        <aside class="detail-panel" aria-label="선택 항목">
+          <div class="detail-empty" id="detailEmpty">
+            <span>날짜나 항목을 선택하세요</span>
+            <strong>오늘 해야 할 일을 바로 확인할 수 있습니다.</strong>
+          </div>
+          <div class="detail-content hidden" id="detailContent">
+            <span class="detail-type" id="detailType"></span>
+            <h2 id="detailTitle"></h2>
+            <p id="detailMeta"></p>
+            <p id="detailMemo"></p>
+            <div class="detail-actions">
+              <button id="editSelected" type="button">수정</button>
+              <button id="completeSelected" type="button">완료</button>
+              <button id="deleteSelected" type="button" class="danger">삭제</button>
+            </div>
+          </div>
+
+          <div class="day-stack">
+            <div class="day-stack-heading">
+              <strong id="selectedDateLabel">오늘</strong>
+              <span id="selectedCount">0개</span>
+            </div>
+            <div class="day-list" id="dayList"></div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="supabase-config.js"></script>
+    <script src="v2.js"></script>
+  </body>
+</html>

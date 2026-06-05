@@ -38,6 +38,7 @@ let notificationTimer = null;
 let serviceWorkerRegistration = null;
 let taskStorageAdapter = null;
 let headerSaveTimer = null;
+let calendarActionMenu = null;
 
 const CATEGORY_LABELS = {
   homeroom: "담임 일정",
@@ -73,6 +74,7 @@ const PERSON_CATEGORY_PROFILES = {
     },
     order: ["homeroom", "subject", "department", "training"],
     selectOrder: ["subject", "department", "training", "homeroom"],
+    defaultCategory: "subject",
   },
 };
 
@@ -253,6 +255,7 @@ function setupCategoryShell() {
   const order = getCategoryOrder();
 
   updateCategorySelect(elements.categoryInput, labels, getCategorySelectOrder());
+  elements.categoryInput.value = getDefaultCategory();
   updateCategorySelect(elements.taskCategoryInput, getTaskCategoryLabels(), order);
   updateCategoryTabs(shortLabels, order);
   updateLegend(labels, order);
@@ -580,6 +583,7 @@ function resetForm() {
   const selectedDate = state.selectedDate || toDateInputValue(new Date());
   elements.scheduleForm.reset();
   elements.editingId.value = "";
+  elements.categoryInput.value = getDefaultCategory();
   elements.dateInput.value = selectedDate;
   elements.reminderInput.value = String(DEFAULT_REMINDER_MINUTES);
   elements.formTitle.textContent = "새 일정";
@@ -739,7 +743,10 @@ function renderCalendar() {
             <span>${schedule.startTime || getCategoryShortLabel(schedule.category)}</span>
           </span>
         `;
-        eventButton.addEventListener("click", () => editSchedule(schedule.id));
+        eventButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          showCalendarScheduleMenu(schedule, eventButton);
+        });
         events.append(eventButton);
       });
 
@@ -766,6 +773,54 @@ function renderCalendar() {
       return cell;
     }),
   );
+}
+
+function showCalendarScheduleMenu(schedule, anchor) {
+  closeCalendarActionMenu();
+
+  const menu = document.createElement("div");
+  menu.className = "calendar-action-menu";
+  menu.addEventListener("click", (event) => event.stopPropagation());
+
+  const title = document.createElement("strong");
+  title.textContent = schedule.title;
+
+  const editButton = document.createElement("button");
+  editButton.type = "button";
+  editButton.textContent = "일정 수정";
+  editButton.addEventListener("click", () => {
+    closeCalendarActionMenu();
+    editSchedule(schedule.id);
+  });
+
+  const deleteButton = document.createElement("button");
+  deleteButton.type = "button";
+  deleteButton.className = "danger";
+  deleteButton.textContent = "일정 삭제";
+  deleteButton.addEventListener("click", () => {
+    closeCalendarActionMenu();
+    deleteSchedule(schedule.id);
+  });
+
+  menu.append(title, editButton, deleteButton);
+  document.body.append(menu);
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(12, Math.min(anchorRect.left, window.innerWidth - menuRect.width - 12));
+  const top = Math.max(12, Math.min(anchorRect.bottom + 6, window.innerHeight - menuRect.height - 12));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+
+  calendarActionMenu = menu;
+  setTimeout(() => {
+    document.addEventListener("click", closeCalendarActionMenu, { once: true });
+  });
+}
+
+function closeCalendarActionMenu() {
+  calendarActionMenu?.remove();
+  calendarActionMenu = null;
 }
 
 function renderAgenda() {
@@ -1677,6 +1732,10 @@ function getCategoryOrder() {
 
 function getCategorySelectOrder() {
   return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.selectOrder || getCategoryOrder();
+}
+
+function getDefaultCategory() {
+  return PERSON_CATEGORY_PROFILES[CURRENT_PERSON.id]?.defaultCategory || getCategorySelectOrder()[0] || "homeroom";
 }
 
 function getCategoryLabel(category) {
