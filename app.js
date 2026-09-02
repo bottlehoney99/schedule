@@ -704,7 +704,7 @@ function renderCalendar() {
   const firstCell = addDays(monthStart, -monthStart.getDay());
   const cells = Array.from({ length: 42 }, (_, index) => addDays(firstCell, index));
   const todayValue = toDateInputValue(new Date());
-  const filtered = getFilteredSchedules().filter((schedule) => !schedule.completed);
+  const filtered = getFilteredSchedules();
 
   elements.calendarGrid.replaceChildren(
     ...cells.map((date) => {
@@ -736,6 +736,7 @@ function renderCalendar() {
         const eventButton = document.createElement("button");
         eventButton.type = "button";
         eventButton.className = `day-event ${schedule.category}`;
+        eventButton.classList.toggle("is-completed", schedule.completed);
         eventButton.innerHTML = `
           <span class="dot ${schedule.category}"></span>
           <span>
@@ -785,6 +786,14 @@ function showCalendarScheduleMenu(schedule, anchor) {
   const title = document.createElement("strong");
   title.textContent = schedule.title;
 
+  const completeButton = document.createElement("button");
+  completeButton.type = "button";
+  completeButton.textContent = schedule.completed ? "완료 해제" : "일정 완료";
+  completeButton.addEventListener("click", () => {
+    closeCalendarActionMenu();
+    toggleComplete(schedule.id);
+  });
+
   const editButton = document.createElement("button");
   editButton.type = "button";
   editButton.textContent = "일정 수정";
@@ -802,7 +811,7 @@ function showCalendarScheduleMenu(schedule, anchor) {
     deleteSchedule(schedule.id);
   });
 
-  menu.append(title, editButton, deleteButton);
+  menu.append(title, completeButton, editButton, deleteButton);
   document.body.append(menu);
 
   const anchorRect = anchor.getBoundingClientRect();
