@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#b5502f" />
+    <meta name="theme-color" content="#783b48" />
     <title>학교 일정 관리</title>
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -18,7 +18,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css?v=redesign1" />
+    <link rel="stylesheet" href="styles.css?v=autumn-20261008" />
   </head>
   <body>
     <div class="app-shell">
@@ -28,6 +28,10 @@
           <h1>학교 일정 관리</h1>
         </div>
         <div class="topbar-actions">
+          <div class="season-note">
+            <img src="assets/autumn.jpg" alt="단풍이 든 가을 나무" width="64" height="48" />
+            <span><small>오늘</small><time id="headerDate"></time></span>
+          </div>
           <button class="icon-button" id="exportButton" type="button" aria-label="일정 내보내기" title="일정 내보내기">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" /></svg>
           </button>
@@ -38,9 +42,18 @@
         </div>
       </header>
 
+      <section class="overview" aria-label="일정 요약">
+        <div class="stats-grid" id="statsGrid"></div>
+        <button class="ghost-button" id="clearCompletedButton" type="button">완료 정리</button>
+      </section>
+
       <main class="layout">
         <aside class="side-panel" aria-label="일정 입력과 요약">
-          <section class="section-block">
+          <div class="entry-switcher" role="tablist" aria-label="입력 종류">
+            <button class="entry-tab active" id="scheduleEntryTab" type="button" role="tab" data-entry-mode="schedule" aria-selected="true" aria-controls="scheduleEntry">일정</button>
+            <button class="entry-tab" id="taskEntryTab" type="button" role="tab" data-entry-mode="task" aria-selected="false" aria-controls="taskEntry">기간 업무</button>
+          </div>
+          <section class="section-block" id="scheduleEntry" role="tabpanel" aria-labelledby="scheduleEntryTab">
             <div class="section-heading">
               <h2 id="formTitle">새 일정</h2>
               <button class="ghost-button hidden" id="cancelEditButton" type="button">편집 취소</button>
@@ -86,18 +99,6 @@
               </div>
 
               <label>
-                <span>알림</span>
-                <select id="reminderInput">
-                  <option value="none">알림 없음</option>
-                  <option value="0">정시</option>
-                  <option value="10" selected>10분 전</option>
-                  <option value="30">30분 전</option>
-                  <option value="60">1시간 전</option>
-                  <option value="1440">하루 전</option>
-                </select>
-              </label>
-
-              <label>
                 <span>메모</span>
                 <textarea id="memoInput" maxlength="240" rows="4" placeholder="준비물, 전달 사항, 관련 학급 등을 적어두세요."></textarea>
               </label>
@@ -109,15 +110,7 @@
             </form>
           </section>
 
-          <section class="section-block stats-block">
-            <div class="section-heading">
-              <h2>요약</h2>
-              <button class="ghost-button" id="clearCompletedButton" type="button">완료 정리</button>
-            </div>
-            <div class="stats-grid" id="statsGrid"></div>
-          </section>
-
-          <section class="section-block task-form-block">
+          <section class="section-block task-form-block hidden" id="taskEntry" role="tabpanel" aria-labelledby="taskEntryTab">
             <div class="section-heading">
               <h2 id="taskFormTitle">기간 업무</h2>
               <button class="ghost-button hidden" id="cancelTaskEditButton" type="button">편집 취소</button>
@@ -161,18 +154,6 @@
                 <span id="taskSubmitLabel">업무 추가</span>
               </button>
             </form>
-          </section>
-
-          <section class="section-block notification-block">
-            <div class="section-heading">
-              <h2>알림</h2>
-              <span class="status-pill" id="notificationStatus">확인 중</span>
-            </div>
-            <p class="notice-text">시작 시간이 없는 일정은 오전 8시 기준으로 알림을 보냅니다.</p>
-            <div class="notification-actions">
-              <button class="ghost-button" id="notificationButton" type="button">알림 허용</button>
-              <button class="ghost-button" id="testNotificationButton" type="button">테스트</button>
-            </div>
           </section>
 
           <section class="section-block upcoming-block">
@@ -250,7 +231,7 @@
           <div class="task-board-heading">
             <div>
               <h2>기간 업무</h2>
-              <p>선택한 달과 겹치는 업무를 표시합니다.</p>
+              <p id="taskMonthSummary">이번 달</p>
             </div>
             <div class="task-board-actions">
               <button class="ghost-button" id="showOpenTasksButton" type="button">미완료</button>
@@ -315,6 +296,6 @@
     </template>
 
     <script src="supabase-config.js"></script>
-    <script src="app.js?v=redesign1"></script>
+    <script src="app.js?v=autumn-20261008"></script>
   </body>
 </html>
