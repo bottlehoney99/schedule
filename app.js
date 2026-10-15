@@ -673,7 +673,9 @@ function renderCalendar() {
   elements.calendarGrid.replaceChildren(
     ...cells.map((date) => {
       const dateValue = toDateInputValue(date);
-      const daySchedules = filtered.filter((schedule) => schedule.date === dateValue).sort(sortSchedules);
+      const daySchedules = filtered
+        .filter((schedule) => schedule.date === dateValue)
+        .sort((a, b) => Number(a.completed) - Number(b.completed) || sortSchedules(a, b));
       const isExpanded = state.expandedCalendarDates.has(dateValue);
       const visibleSchedules = isExpanded ? daySchedules : daySchedules.slice(0, 4);
       const cell = document.createElement("div");
